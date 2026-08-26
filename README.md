@@ -14,24 +14,52 @@ build order. Currently in **Phase 1**: rules, the test fixture, and
 
 | Command | What it does |
 |---|---|
-| `/generate-tests [file or folder]` | Generate unit tests for a target, matching the repo's own conventions |
-| `/build-context` | Build/update `.qa/context.md`, a living project overview |
-| `/triage-tests` | Run the suite, classify each failure as a bad test or a real bug, fix what's safe, file the rest |
-| `/test-pipeline` | Run all three in sequence, end to end |
+| `/agentic-qe:generate-tests [file or folder]` | Generate unit tests for a target, matching the repo's own conventions |
+| `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview |
+| `/agentic-qe:triage-tests` | Run the suite, classify each failure as a bad test or a real bug, fix what's safe, file the rest |
+| `/agentic-qe:test-pipeline` | Run all three in sequence, end to end |
 
-## Installing locally
+## Install (one step)
 
-This is currently a local-only project (no GitHub repo yet). To use the
-skills in this repo with Claude Code, they load automatically from
-`.claude/skills/` when Claude Code is run from this directory. Once this
-project moves to GitHub, teammates will be able to clone the repo and get
-the skills the same way — no separate install step, since skills in
-`.claude/skills/` are picked up automatically by Claude Code. A packaged
-plugin distribution is planned for a later phase.
+This repo is packaged as a Claude Code plugin — and doubles as its own
+marketplace — so anyone with access to it can install the skills into
+their own Claude Code with two commands, run from anywhere (no need to
+clone or `cd` into this repo first):
+
+```
+/plugin marketplace add Cognify-Analytics/Agentic-QE
+/plugin install agentic-qe@agentic-qe-marketplace
+```
+
+(Or from a regular shell: `claude plugin marketplace add Cognify-Analytics/Agentic-QE`
+then `claude plugin install agentic-qe@agentic-qe-marketplace`.)
+
+That's it — the four skills are then available in **any** project as
+`/agentic-qe:generate-tests`, `/agentic-qe:build-context`,
+`/agentic-qe:triage-tests`, and `/agentic-qe:test-pipeline`, and Claude
+will also invoke them automatically when a request matches what they do.
+
+To pin to a specific release instead of the latest commit on `main`, add
+`@<tag>` to the marketplace command, e.g.
+`/plugin marketplace add Cognify-Analytics/Agentic-QE@v0.1.0`.
+
+### Working on this repo itself
+
+If you're developing the skills themselves (not just using them), point
+Claude Code at your local checkout instead of installing from the
+marketplace:
+
+```
+claude --plugin-dir .
+```
+
+Run `/reload-plugins` after editing a `SKILL.md` to pick up changes
+without restarting.
 
 ## Project layout
 
-- `.claude/skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
+- `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
+- `skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
 - `rules/` — the single shared source of testing rules and conventions, read by the skills
 - `templates/` — output templates (GitHub issue template, etc.)
 - `scripts/` — helper scripts the skills shell out to

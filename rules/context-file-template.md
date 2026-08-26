@@ -49,7 +49,7 @@ last_updated: {yyyy-mm-dd}
 - **`[manual]` is a human's marker, not yours.** You never write `[manual]`
   yourself. When a line already carries it, preserve that line's exact text
   on every future update, in every section, no matter what the rest of the
-  section says. See `.claude/skills/build-context/SKILL.md`'s incremental
+  section says. See `skills/build-context/SKILL.md`'s incremental
   update logic for exactly how this is enforced line-by-line.
 - **Coverage numbers always come from `.qa/test-inventory.json`.** Never
   recompute them.

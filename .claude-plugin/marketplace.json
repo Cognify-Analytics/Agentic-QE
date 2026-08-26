@@ -1,0 +1,16 @@
+{
+  "name": "agentic-qe-marketplace",
+  "owner": {
+    "name": "Cognify Analytics",
+    "url": "https://github.com/Cognify-Analytics"
+  },
+  "description": "Agentic QE — Claude Code skills for test generation, project context, and failure triage.",
+  "plugins": [
+    {
+      "name": "agentic-qe",
+      "source": "./",
+      "description": "Skills that write unit tests, document a codebase, run the tests, and triage failures.",
+      "version": "0.1.0"
+    }
+  ]
+}

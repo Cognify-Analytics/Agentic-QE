@@ -55,7 +55,7 @@ that one. When in doubt, escalate — never guess your way to SIMPLE.
 Read `.qa/context.md` if it exists. You cannot judge whether a failure is a
 bug unless you know what the code is supposed to do. If it's missing, warn
 on screen and continue with less confidence (see
-`rules/error-classification.md`'s "Applying this without context.md"
+`${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`'s "Applying this without context.md"
 section) — do not stop. If `context_sha` in the file differs from the
 current git SHA (or, if this repo has no git history yet, from
 `.qa/test-inventory.json`'s `last_updated_sha`), warn that the context may be
@@ -79,7 +79,7 @@ stack trace/traceback.
 
 ### Step 5 — Read the rules and classify
 
-Read `rules/error-classification.md`. For each failure:
+Read `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`. For each failure:
 
 1. **Check provenance first.** Look up the failure's test file in
    `.qa/test-inventory.json`'s `modules`. If the module's `generated_by_qa`
@@ -88,7 +88,7 @@ Read `rules/error-classification.md`. For each failure:
    all, treat it the same as `generated_by_qa: false` — you have no basis
    to believe this pipeline owns it.)
 2. Otherwise, match the failure against the SIMPLE/COMPLEX tables in
-   `rules/error-classification.md`.
+   `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`.
 3. If it doesn't cleanly match, it's AMBIGUOUS — which is COMPLEX. Never
    guess.
 
@@ -117,14 +117,14 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 
 ### Step 7 — COMPLEX/AMBIGUOUS: find the owner and check for an existing issue
 
-1. Run `scripts/resolve_owners.py <path>` for the failing file's source
+1. Run `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py <path>` for the failing file's source
    module. It returns `owners: []` if there's no CODEOWNERS or no match —
    that's a normal outcome, not an error; file the issue without an
    assignee rather than guessing one.
 2. **Look for an existing open issue first**, GitHub MCP server if
    available, otherwise the `gh` CLI (`gh issue list --search ...`). If one
    clearly matches this failure, comment on it instead of opening a new one.
-3. Otherwise, draft a new issue from `templates/github-issue-template.md`,
+3. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
    filling in the failure output, the relevant excerpt of `.qa/context.md`
    (or whatever you used in its absence, per Step 1), and the resolved
    owner if any.
@@ -212,7 +212,7 @@ happened.
 ## Troubleshooting
 
 **`.qa/context.md` missing.** Warn, continue with reduced confidence — see
-`rules/error-classification.md`. Do not stop.
+`${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`. Do not stop.
 
 **`.qa/test-inventory.json` missing (so you can't check `generated_by_qa`).**
 Treat every failing test as if it were human-written (COMPLEX-only) until
@@ -238,7 +238,7 @@ move on — don't try a third time.
 
 ## Rules reference
 
-- `rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, and the
+- `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, and the
   human-written-test override
-- `templates/github-issue-template.md` — issue body shape
-- `scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)
+- `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
+- `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)

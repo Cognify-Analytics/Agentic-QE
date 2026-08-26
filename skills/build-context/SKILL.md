@@ -35,7 +35,7 @@ file's own skill, `/generate-tests`, does have Bash and stamps a real SHA)
 
 ### Step 1 — Read the template
 
-Read `rules/context-file-template.md`. It fixes the exact shape of the
+Read `${CLAUDE_PLUGIN_ROOT}/rules/context-file-template.md`. It fixes the exact shape of the
 output — section order, the `[inferred]`/`[manual]` conventions, the word
 limit. Every run must produce something matching that shape.
 
@@ -136,5 +136,5 @@ partial/incremental update onto a document that isn't in the expected shape
 
 ## Rules reference
 
-- `rules/context-file-template.md` — the exact shape, and the
+- `${CLAUDE_PLUGIN_ROOT}/rules/context-file-template.md` — the exact shape, and the
   `[inferred]`/`[manual]` conventions
