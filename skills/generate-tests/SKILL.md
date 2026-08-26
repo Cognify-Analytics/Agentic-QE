@@ -17,7 +17,7 @@ the stack, don't assume one.
 
 - May only create or change files in the test location (Section below) and its
   test-data builders. Never touch production source code.
-- Never invent a test folder — follow `rules/test-location-map.md` exactly.
+- Never invent a test folder — follow `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` exactly.
 - Quality over speed. Read the rules and the real dependency types before writing
   a single test. Tests that invent method names or fields are worse than no tests.
 - Limits: 20 modules per run, 5 compile-fix attempts, 3 run-fix attempts per test.
@@ -29,9 +29,9 @@ the stack, don't assume one.
 
 ### Step 1 — Read the rules
 
-Read every file in `rules/general/` and, once you know the language (Step 2),
-every file in `rules/lang/<language>/`. If there is no `rules/lang/<language>/`
-folder for the detected language, say so and continue with `rules/general/` only.
+Read every file in `${CLAUDE_PLUGIN_ROOT}/rules/general/` and, once you know the language (Step 2),
+every file in `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`. If there is no `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`
+folder for the detected language, say so and continue with `${CLAUDE_PLUGIN_ROOT}/rules/general/` only.
 
 ### Step 2 — Work out the stack
 
@@ -55,7 +55,7 @@ Section 6.5) is that nothing gets lost silently.
 
 ### Step 3 — Work out where tests go
 
-Follow `rules/test-location-map.md` in order:
+Follow `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` in order:
 1. Does the repo already have tests? Use that location, even if unusual.
 2. No existing tests? Use the language default from the table.
 3. Can't tell? Stop and ask the user with `AskUserQuestion`. Do not guess.
@@ -96,7 +96,7 @@ invents a method or field that does not exist.
 Look for `conftest.py` fixtures, factory functions, or builder classes already in
 the repo. Add to them rather than duplicating. Only put genuinely large static
 fixtures (sample files, big JSON/CSV payloads) under `tests/fixtures/` — everything
-else is a builder/factory, per `rules/general/cleanly-create-test-data.md`.
+else is a builder/factory, per `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md`.
 
 ### Step 9 — List the test cases
 
@@ -170,7 +170,7 @@ learned in Step 7 and using the builders from Step 8.
 
 ### Step 13 — Get coverage
 
-Run `scripts/parse_coverage.py` against the test run's coverage output to get a
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/parse_coverage.py` against the test run's coverage output to get a
 clean per-module coverage JSON.
 
 ### Step 14 — Update the inventory and write scratch output
@@ -288,8 +288,8 @@ test (correctly) expects.** Do not touch production code. Leave the discrepancy
 noted in `01-tests.json` for `/triage-tests` to classify — this skill does not
 decide whether it's a bug.
 
-**Unsupported / unrecognized language.** Apply `rules/general/` only, tell the
-user there is no `rules/lang/<language>/` yet, and proceed with extra care on
+**Unsupported / unrecognized language.** Apply `${CLAUDE_PLUGIN_ROOT}/rules/general/` only, tell the
+user there is no `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/` yet, and proceed with extra care on
 naming/location conventions.
 
 ---
@@ -297,26 +297,26 @@ naming/location conventions.
 ## Rules reference
 
 Always read, regardless of language:
-- `rules/general/technology-stack-detection.md` — detect language/framework/test command
-- `rules/general/test-case-generation-strategy.md` — INCLUDE/EXCLUDE criteria for test cases
-- `rules/general/naming-conventions.md` — `{method}_{state}_{outcome}` format
-- `rules/general/general-principles.md` — Given-When-Then, actual/expected, determinism, minimal mocking
-- `rules/general/what-makes-good-test.md` — Clarity, Completeness, Conciseness, Resilience
-- `rules/general/cleanly-create-test-data.md` — helpers and builders over inline construction
-- `rules/general/keep-cause-effect-clear.md` — setup next to its assertions
-- `rules/general/no-logic-in-tests.md` — no conditionals/loops/computed values in a test body
-- `rules/general/keep-tests-focused.md` — one scenario per test
-- `rules/general/test-behaviors-not-methods.md` — organize by observable behavior
-- `rules/general/verify-relevant-arguments-only.md` — don't over-specify mock verification
-- `rules/general/prefer-public-apis.md` — test through public interfaces
-- `rules/general/existing-test-awareness.md` — extend, don't duplicate
-- `rules/general/code-context-analysis.md` — read the full dependency graph first
-- `rules/general/json-serialization.md` — no computed/derived expected payloads
-- `rules/general/compilation-verification.md` — Step 12, compile/build phase
-- `rules/general/test-execution-verification.md` — Step 12, run phase; fix tests, never production code
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/technology-stack-detection.md` — detect language/framework/test command
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/test-case-generation-strategy.md` — INCLUDE/EXCLUDE criteria for test cases
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/naming-conventions.md` — `{method}_{state}_{outcome}` format
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/general-principles.md` — Given-When-Then, actual/expected, determinism, minimal mocking
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/what-makes-good-test.md` — Clarity, Completeness, Conciseness, Resilience
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md` — helpers and builders over inline construction
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/keep-cause-effect-clear.md` — setup next to its assertions
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/no-logic-in-tests.md` — no conditionals/loops/computed values in a test body
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/keep-tests-focused.md` — one scenario per test
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/test-behaviors-not-methods.md` — organize by observable behavior
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/verify-relevant-arguments-only.md` — don't over-specify mock verification
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/prefer-public-apis.md` — test through public interfaces
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md` — extend, don't duplicate
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md` — read the full dependency graph first
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/json-serialization.md` — no computed/derived expected payloads
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/compilation-verification.md` — Step 12, compile/build phase
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/test-execution-verification.md` — Step 12, run phase; fix tests, never production code
 
-Then, for the detected language, everything under `rules/lang/<language>/` (for
-example `rules/lang/python/`).
+Then, for the detected language, everything under `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/` (for
+example `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`).
 
 And always:
-- `rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD
+- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD

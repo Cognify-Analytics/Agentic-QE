@@ -9,7 +9,7 @@ tags: triage, classification, safety
 
 Every test failure gets exactly one label: **SIMPLE**, **COMPLEX**, or
 **AMBIGUOUS**. The label decides what happens next — see
-`.claude/skills/triage-tests/SKILL.md`. This file only defines the labels.
+`skills/triage-tests/SKILL.md`. This file only defines the labels.
 
 **The rule that overrides everything else:** if the failing test is a
 human-written test (`generated_by_qa: false` for its module in
