@@ -1,0 +1,22 @@
+# Copy this file into the target repo as .github/workflows/qa.yml.
+# It calls the reusable workflow hosted in Agentic-QE — see
+# .github/workflows/qa-pipeline.yml in this repo for what it actually does.
+name: QA Pipeline
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/**']
+  workflow_dispatch:
+
+jobs:
+  qa:
+    uses: Cognify-Analytics/Agentic-QE/.github/workflows/qa-pipeline.yml@main
+    secrets: inherit
+    with:
+      live: true
+      # Pin to a released tag once one exists, e.g. @v0.2.0
+      plugin_ref: main
+      setup_script: |
+        python -m pip install -U pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov

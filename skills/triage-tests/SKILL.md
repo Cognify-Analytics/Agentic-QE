@@ -65,7 +65,10 @@ stale and carry on with less confidence.
 
 Read `test_command` from `.qa/test-inventory.json`. If that file is missing,
 fall back to `.claude-pipeline/01-tests.json`. **Do not guess the test
-command** — if neither file has it, stop and ask the user.
+command** — if neither file has it: **in CI mode** (`.claude-pipeline/run.json`
+exists with `"mode"` `"ci"`), write `.claude-pipeline/03-triage.json` with
+`"status": "failed"` and a `"reason"` explaining the test command couldn't be
+found, and stop. **Interactively**, stop and ask the user.
 
 ### Step 3 — Run the tests
 
@@ -121,18 +124,27 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
    module. It returns `owners: []` if there's no CODEOWNERS or no match —
    that's a normal outcome, not an error; file the issue without an
    assignee rather than guessing one.
-2. **Look for an existing open issue first**, GitHub MCP server if
-   available, otherwise the `gh` CLI (`gh issue list --search ...`). If one
-   clearly matches this failure, comment on it instead of opening a new one.
-3. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
-   filling in the failure output, the relevant excerpt of `.qa/context.md`
-   (or whatever you used in its absence, per Step 1), and the resolved
-   owner if any.
-4. **Report-only mode (default):** do not actually call the GitHub MCP
+2. **Build a stable fingerprint for this failure**: `{test name} ({file})` —
+   e.g. `calculate_discount_premiumTier_returnsDocumentedRate
+   (tests/test_pricing.py)`. Put it verbatim in the issue title (prefixed by
+   the template's own title convention, if any). This is what makes a
+   re-run idempotent — a run's issue for the same failure must always
+   produce the same title.
+3. **Look for an existing open issue first**, GitHub MCP server if
+   available, otherwise the `gh` CLI (`gh issue list --search ...`) —
+   search on the fingerprint from step 2, not just free-text keywords. If
+   one clearly matches this failure, comment on it instead of opening a new
+   one — this is what keeps a re-triggered run (e.g. `workflow_dispatch` on
+   the same PR) from filing a duplicate every time.
+4. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
+   filling in the fingerprinted title, the failure output, the relevant
+   excerpt of `.qa/context.md` (or whatever you used in its absence, per
+   Step 1), and the resolved owner if any.
+5. **Report-only mode (default):** do not actually call the GitHub MCP
    server or `gh` — write the fully-drafted issue/comment content into
    `03-triage.json`'s `issues_created`/`issues_commented` and show it on
    screen, clearly marked `[REPORT-ONLY — not filed]`.
-5. **`--live` mode:** actually create the issue (GitHub MCP server first; if
+6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
    `gh issue comment`) and record the real URL.
 
@@ -142,12 +154,31 @@ combine everything past the cap into one summary issue. Record this in
 
 ### Step 8 — Open the PR for any fixes made
 
-If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
+**Pick the base branch first.** In CI mode (`.claude-pipeline/run.json`
+exists with `"mode"` `"ci"`), the PR must be based on `run.json`'s
+`ci.pr_base_branch` — this is the developer's own PR head branch, so the fix
+flows back into their PR rather than being stranded against the repo's
+default branch. **If `ci.pr_base_branch` is missing, do not guess a base —
+fall back to report-only for this step** (note what would have been opened,
+same as below, and record why in `03-triage.json`). Interactively (no CI
+`run.json`, or `mode` isn't `"ci"`), base it on the repo's current branch as
+before.
+
+If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch, or if
+this is a CI run and `.qa/` has changes to commit (new/updated
+`test-inventory.json`, `context.md`, or a `.qa/runs/<date>-<sha>.json`
+record) even with zero SIMPLE fixes:
 - **Report-only mode:** note in `03-triage.json` and on screen what PR
   *would* be opened (branch, files changed, one-line summary per fix),
   marked `[REPORT-ONLY — not opened]`. Do not push the branch.
-- **`--live` mode:** push the branch and open a PR (GitHub MCP first, `gh
-  pr create` as fallback). Never merge it.
+- **`--live` mode:** create the branch if it doesn't already exist, commit
+  the SIMPLE fixes (if any) **and** `.qa/context.md`, `.qa/test-inventory.json`
+  and `.qa/runs/<date>-<sha>.json` onto it, push, and open a PR against the
+  base branch chosen above (GitHub MCP first, `gh pr create` as fallback).
+  Never merge it. Committing `.qa/` here is what lets it reach the repo at
+  all in CI — the pipeline never commits anywhere on its own outside this
+  branch, and without this step every future CI run would bootstrap from
+  scratch instead of running incrementally.
 
 ### Step 9 — Write the result
 
@@ -219,7 +250,9 @@ Treat every failing test as if it were human-written (COMPLEX-only) until
 proven otherwise — the safe default when provenance is unknown. Say so in
 the run's notes.
 
-**Test command unknown and can't be found anywhere.** Stop and ask the user.
+**Test command unknown and can't be found anywhere.** In CI mode, write
+`03-triage.json` with `"status": "failed"` and stop — do not ask.
+Interactively, stop and ask the user.
 
 **GitHub MCP server not configured/available.** Fall back to the `gh` CLI.
 If `gh` isn't authenticated either, report-only mode still works fully

@@ -1,0 +1,172 @@
+name: Agentic QE Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      setup_script:
+        description: Shell commands that install the target repo's dependencies (test framework included).
+        required: true
+        type: string
+      live:
+        description: Run /triage-tests in live mode (real branches/PRs/issues) instead of report-only.
+        required: false
+        type: boolean
+        default: false
+      plugin_ref:
+        description: Agentic-QE tag/ref to pin the plugin checkout to.
+        required: false
+        type: string
+        default: main
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      AGENTIC_QE_READ_TOKEN:
+        description: Token with read access to Cognify-Analytics/Agentic-QE, only needed while that repo is private.
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: qa-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.draft == false &&
+       !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
+    steps:
+      - name: Check out the target repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out the Agentic QE plugin
+        uses: actions/checkout@v4
+        with:
+          repository: Cognify-Analytics/Agentic-QE
+          ref: ${{ inputs.plugin_ref }}
+          path: .agentic-qe
+          token: ${{ secrets.AGENTIC_QE_READ_TOKEN || github.token }}
+
+      - name: Keep scratch out of the diff
+        run: printf '%s\n' '.claude-pipeline/' '.agentic-qe/' >> .git/info/exclude
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install target repo dependencies
+        run: ${{ inputs.setup_script }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  'agentic-qe[bot]'
+          git config user.email 'agentic-qe[bot]@users.noreply.github.com'
+
+      - name: Decide strategy and write run.json
+        id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-pipeline
+
+          if [ -f .qa/test-inventory.json ] && [ -f .qa/context.md ] \
+             && jq -e '.modules' .qa/test-inventory.json >/dev/null 2>&1; then
+            STRATEGY=incremental
+          else
+            STRATEGY=bootstrap
+          fi
+
+          TARGETS='[]'
+          if [ "$STRATEGY" = incremental ] && [ -n "${BASE:-}" ]; then
+            git fetch --no-tags origin "$BASE"
+            CHANGED=$(git diff --name-only --diff-filter=d "origin/$BASE...HEAD" \
+              | grep -Ev '(^|/)(tests?|spec|__tests__)/' \
+              | grep -E '\.(py|js|jsx|ts|tsx|java|kt|go|rb|cs|rs|php)$' || true)
+            if [ -z "$CHANGED" ]; then
+              STRATEGY=triage-only
+            else
+              TARGETS=$(printf '%s\n' "$CHANGED" | jq -R . | jq -sc .)
+            fi
+          elif [ "$STRATEGY" = incremental ]; then
+            STRATEGY=triage-only
+          fi
+
+          jq -n \
+            --arg sha "$(git rev-parse --short HEAD)" \
+            --arg branch "${{ github.head_ref || github.ref_name }}" \
+            --arg ts "$(date -u +%FT%TZ)" \
+            --arg strategy "$STRATEGY" \
+            --argjson targets "$TARGETS" \
+            --argjson pr "${{ github.event.pull_request.number || 'null' }}" \
+            --argjson live "${{ inputs.live && 'true' || 'false' }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
+            { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live,
+              ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
+                    strategy:$strategy, targets:$targets } }' > .claude-pipeline/run.json
+
+          cat .claude-pipeline/run.json
+
+      - name: Run the QA pipeline
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: '/agentic-qe:test-pipeline'
+          track_progress: false
+          settings: |
+            { "env": { "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+                       "GH_REPO":  "${{ github.repository }}" } }
+          claude_args: |
+            --plugin-dir ./.agentic-qe
+            --max-turns 150
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash"
+
+      - name: Assert no production source was changed
+        if: always()
+        run: |
+          set -euo pipefail
+          LOC=$(jq -r '.test_location // "tests/"' .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
+          BAD=$(git status --porcelain | awk '{print $2}' \
+                | grep -Ev "^(${LOC}|\.qa/|\.claude-pipeline/)" || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::pipeline modified files outside the test location:"
+            echo "$BAD"
+            exit 1
+          fi
+
+      - name: Post summary comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          { echo '<!-- agentic-qe-summary -->'
+            cat .claude-pipeline/summary.md 2>/dev/null || echo 'QA pipeline did not complete — see the run log.'
+            echo; echo "_[run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
+          } > body.md
+          ID=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+               --jq '.[] | select(.body | contains("agentic-qe-summary")) | .id' | head -1)
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$ID" -F body=@body.md
+          else
+            gh pr comment "$PR" --body-file body.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-pipeline-${{ github.run_id }}
+          path: |
+            .claude-pipeline/
+            .qa/
+          retention-days: 14

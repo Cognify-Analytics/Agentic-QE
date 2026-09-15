@@ -58,7 +58,12 @@ Section 6.5) is that nothing gets lost silently.
 Follow `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` in order:
 1. Does the repo already have tests? Use that location, even if unusual.
 2. No existing tests? Use the language default from the table.
-3. Can't tell? Stop and ask the user with `AskUserQuestion`. Do not guess.
+3. Can't tell? **In CI mode** (`.claude-pipeline/run.json` exists with
+   `"mode"` `"pipeline"` or `"ci"`), do not ask — write
+   `.claude-pipeline/01-tests.json` with `"status": "failed"` and a
+   `"reason"` explaining exactly what couldn't be determined, and stop.
+   **Interactively**, stop and ask the user with `AskUserQuestion`. Do not
+   guess either way.
 
 ### Step 4 — Read the existing inventory
 
@@ -68,8 +73,13 @@ run — you will create it at the end.
 
 ### Step 5 — Pick what to test
 
-- If the user gave a target (`$ARGUMENTS`), use exactly that.
-- Otherwise, list every source module with no corresponding test file (per the
+- If `.claude-pipeline/run.json` exists and its `ci.targets` array is
+  non-empty, test exactly those paths — this is CI's incremental mode,
+  targeting only the source files the PR actually changed. Skip the
+  ranking below entirely.
+- Otherwise, if the user gave a target (`$ARGUMENTS`), use exactly that.
+- Otherwise (no CI targets, no `$ARGUMENTS` — whole-repo bootstrap, local or
+  CI), list every source module with no corresponding test file (per the
   inventory, or by scanning if there is no inventory yet). Rank them: business
   logic and entry points first, config/constants/simple data classes last. Take
   the top 20.
@@ -125,11 +135,12 @@ For each target, list the test cases in Given-When-Then form, one per code branc
 Ask the user to approve the test case list with `AskUserQuestion` before writing
 any code.
 
-**Skip this step entirely when running in pipeline mode.** Check
+**Skip this step entirely when running in pipeline or CI mode.** Check
 `.claude-pipeline/run.json` before Step 9's list is shown: if it exists and its
-`"mode"` field is `"pipeline"`, this run was started by `/test-pipeline`, which
+`"mode"` field is `"pipeline"` or `"ci"`, this run was started by
+`/test-pipeline` (interactively or from the GitHub Actions workflow), which
 writes that file before invoking any stage — go straight to Step 11 without
-asking. If the file doesn't exist or `"mode"` isn't `"pipeline"`, this is a
+asking. If the file doesn't exist or `"mode"` is neither of those, this is a
 direct, standalone invocation — ask as normal.
 
 ### Step 11 — Write the test code
@@ -273,8 +284,11 @@ a `"note"` explaining exactly what was missing. Never crash silently.
 
 ## Troubleshooting
 
-**Target not found.** Report the exact path searched and ask the user to clarify
-— do not guess a similarly-named file.
+**Target not found.** **In CI mode** (`run.json`'s `"mode"` is `"pipeline"` or
+`"ci"`), do not ask — write `01-tests.json` with `"status": "failed"` and the
+exact path searched, and stop. **Interactively**, report the exact path
+searched and ask the user to clarify — do not guess a similarly-named file
+either way.
 
 **No test framework detected.** Say so on screen, write the `"status": "failed"`
 `01-tests.json` described in Step 2, and stop. Do not install one or assume a

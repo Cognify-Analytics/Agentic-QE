@@ -17,9 +17,11 @@ Anything else in `$ARGUMENTS` is forwarded to `/generate-tests` as its
 target (a file or folder) — with no target, it scans the whole repo per its
 own Step 5 ranking.
 
-This skill only covers the **local, on-demand run**. A CI/GitHub Action
-wrapper around this same pipeline is a separate, later task — not part of
-this skill.
+This skill also runs unattended inside CI, driven by a GitHub Actions
+reusable workflow that writes `.claude-pipeline/run.json` itself before
+invoking `/agentic-qe:test-pipeline` (see "Before starting" below, and the
+CI `run.json` schema). In that mode you are **not** forked either — same
+single-session behavior, just non-interactive.
 
 ---
 
@@ -34,11 +36,22 @@ this skill.
    any other file yet.
 2. Create `.qa/` if it doesn't exist.
 3. Create `.claude-pipeline/` if it doesn't exist.
-4. Write `.claude-pipeline/run.json` (schema below) — **before invoking any
-   stage**, since that's how `/generate-tests` knows to skip its approval
-   prompt and how `/triage-tests` knows whether to run live.
-5. Ensure `.gitignore` has a `.claude-pipeline/` line (add it if missing;
-   create `.gitignore` if the repo has none). A one-liner is enough:
+4. **Check for a CI-written `run.json` first.** If `.claude-pipeline/run.json`
+   already exists and its `"mode"` is `"ci"`, the GitHub Actions workflow
+   wrote it before invoking this skill (see the CI schema below) — **read it
+   and do not overwrite it.** Everything downstream (stage checks, the
+   summary, the run record) works exactly the same regardless of which
+   schema produced the file. Otherwise (a local, interactive run), write
+   `.claude-pipeline/run.json` yourself now (schema below) — **before
+   invoking any stage**, since that's how `/generate-tests` knows to skip
+   its approval prompt and how `/triage-tests` knows whether to run live.
+5. **Skip this step entirely in CI mode** (i.e. when `run.json`'s `"mode"`
+   is `"ci"`) — the workflow already keeps `.claude-pipeline/` out of the
+   diff via `.git/info/exclude`, and appending to a tracked `.gitignore` on
+   every CI run would dirty the working tree for no reason. For a local
+   run: ensure `.gitignore` has a `.claude-pipeline/` line (add it if
+   missing; create `.gitignore` if the repo has none). A one-liner is
+   enough:
    `grep -qxF '.claude-pipeline/' .gitignore 2>/dev/null || echo '.claude-pipeline/' >> .gitignore`
 6. Ensure `.gitignore` does **not** ignore `.qa/` — that folder is meant to
    be committed (Section 6.1). If you find a `.qa` or `.qa/` line in
@@ -46,7 +59,7 @@ this skill.
    context doc would otherwise never make it into version control and the
    next run would look like a first run to every teammate.
 
-**Expected — `.claude-pipeline/run.json`:**
+**Expected — `.claude-pipeline/run.json` (local, interactive run):**
 
 ```json
 {
@@ -57,6 +70,33 @@ this skill.
   "live": false
 }
 ```
+
+**Expected — `.claude-pipeline/run.json` (CI run, written by the workflow
+before this skill is invoked — see this repo's
+`.github/workflows/qa-pipeline.yml`):**
+
+```json
+{
+  "sha": "a1b2c3d",
+  "branch": "feature/refunds",
+  "timestamp": "2026-09-09T14:02:00Z",
+  "mode": "ci",
+  "live": true,
+  "ci": {
+    "pr_number": 42,
+    "pr_base_branch": "feature/refunds",
+    "run_url": "https://github.com/org/repo/actions/runs/123",
+    "strategy": "incremental",
+    "targets": ["src/orders.py", "src/pricing.py"]
+  }
+}
+```
+
+`ci.strategy` is `bootstrap` | `incremental` | `triage-only`. `ci.targets`
+is the exact file list `/generate-tests` should test (empty/absent means
+whole-repo). `ci.pr_base_branch` is where `/triage-tests` should base its
+auto-fix PR — always the PR's own head branch, never the repo's default
+branch, so the fix flows back into the developer's own PR.
 
 ---
 
