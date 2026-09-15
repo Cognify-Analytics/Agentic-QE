@@ -93,8 +93,12 @@ before this skill is invoked — see this repo's
 ```
 
 `ci.strategy` is `bootstrap` | `incremental` | `triage-only`. `ci.targets`
-is the exact file list `/generate-tests` should test (empty/absent means
-whole-repo). `ci.pr_base_branch` is where `/triage-tests` should base its
+is the exact file list `/generate-tests` should test — non-empty means
+incremental (test exactly those files); empty means either whole-repo
+(`ci.strategy` is `bootstrap`) or nothing at all (`ci.strategy` is
+`triage-only` — `.qa/` already has a baseline and this run touched no
+source, so `/generate-tests` writes nothing and only `/triage-tests` does
+real work). `ci.pr_base_branch` is where `/triage-tests` should base its
 auto-fix PR — always the PR's own head branch, never the repo's default
 branch, so the fix flows back into the developer's own PR.
 
@@ -107,15 +111,18 @@ Invoke it with the Skill tool (forwarding any target from `$ARGUMENTS`).
 **Check before continuing:**
 - Does `.claude-pipeline/01-tests.json` exist, and is its `"status"` not
   `"failed"`?
-- Has `.qa/test-inventory.json` actually been updated (its
-  `last_updated_sha` matches this run's `sha` from `run.json`)?
+- **Unless this is a CI run with `ci.strategy` `"triage-only"`** (in which
+  case `/generate-tests` deliberately wrote nothing and `.qa/` is
+  unchanged by design — skip this second check): has
+  `.qa/test-inventory.json` actually been updated (its `last_updated_sha`
+  matches this run's `sha` from `run.json`)?
 
-**If either check fails: stop the whole pipeline right here.** Do not run
-Stage 2 or 3. Report exactly which check failed and show whatever
-`01-tests.json` does contain (even a `"status": "partial"` file has useful
-detail). This is the check the PRD calls out by name — a silent failure
-here would hand Stage 2 nothing to document and Stage 3 nothing real to
-triage.
+**If either applicable check fails: stop the whole pipeline right here.**
+Do not run Stage 2 or 3. Report exactly which check failed and show
+whatever `01-tests.json` does contain (even a `"status": "partial"` file
+has useful detail). This is the check the PRD calls out by name — a silent
+failure here would hand Stage 2 nothing to document and Stage 3 nothing
+real to triage.
 
 ## Stage 2 — `/build-context`
 
@@ -204,6 +211,14 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
   "caps_hit": []
 }
 ```
+
+**Multi-stack repos** (`01-tests.json`/`03-triage.json` have a `stacks`
+shape — see `/generate-tests`): report coverage and triage totals **per
+stack**, both in `summary.md`'s "## Tests"/"## Failures" sections and in
+this run record's `coverage`/`triage_totals` fields — replace each with an
+object keyed by stack name (e.g. `"coverage": { "backend": {"before":
+23.9, "after": 44.9}, "frontend": {"before": 30.1, "after": 73.1} }`).
+Never collapse two stacks into one combined number.
 
 ---
 

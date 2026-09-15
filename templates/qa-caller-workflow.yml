@@ -1,6 +1,10 @@
 # Copy this file into the target repo as .github/workflows/qa.yml.
 # It calls the reusable workflow hosted in Agentic-QE — see
 # .github/workflows/qa-pipeline.yml in this repo for what it actually does.
+#
+# Two refs must point at the same Agentic-QE version:
+#   - the `uses:` ref below  — which version of the reusable workflow runs
+#   - `plugin_ref`           — which version of the skills/rules it loads
 name: QA Pipeline
 on:
   pull_request:
@@ -13,9 +17,10 @@ jobs:
     uses: Cognify-Analytics/Agentic-QE/.github/workflows/qa-pipeline.yml@main
     secrets: inherit
     with:
-      live: true
-      # Pin to a released tag once one exists, e.g. @v0.2.0
+      live: false
       plugin_ref: main
+      # node_version: '20'   # only if the repo has a JS/TS stack
+      # max_turns: 200       # raise for large or multi-stack repos
       setup_script: |
         python -m pip install -U pip
         pip install -r requirements.txt

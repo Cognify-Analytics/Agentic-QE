@@ -69,6 +69,11 @@ coverage yourself.** If this file doesn't exist, section 4 says so plainly
 ("No test inventory found — run `/generate-tests` first.") and the header's
 `context_sha` is `unknown`.
 
+Check for a `stacks` object (see `/generate-tests`' multi-stack schema) —
+if present, this is a monorepo with more than one independently-tested
+stack (e.g. a Python backend, a TypeScript frontend); Step 7 reports each
+stack's numbers separately rather than a single overall figure.
+
 ### Step 4 — Section 1: what this project does
 
 Read the README, anything under `docs/`, the manifest's description field
@@ -96,6 +101,13 @@ var that isn't there just because the PRD's own worked example has one.
 Pull every number from `.qa/test-inventory.json` (Step 3) — overall
 coverage, per-module coverage bucketed into well/weakly/not-covered,
 framework, test location, and any `skipped_reason` entries as "known gaps."
+
+**Multi-stack (`stacks` present):** report this per stack — a "Backend
+(pytest)" subsection and a "Frontend (jest)" subsection (or whatever the
+stacks are named), each with its own overall coverage, framework, test
+location, and known gaps. Do not average or sum the stacks into one
+number; a combined "60% coverage" figure across two unrelated codebases
+and frameworks is not a number anyone can act on.
 
 ### Step 8 — Changelog
 

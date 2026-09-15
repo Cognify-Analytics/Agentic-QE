@@ -61,24 +61,46 @@ current git SHA (or, if this repo has no git history yet, from
 `.qa/test-inventory.json`'s `last_updated_sha`), warn that the context may be
 stale and carry on with less confidence.
 
-### Step 2 — Get the test command
+### Step 2 — Get the test command(s)
 
-Read `test_command` from `.qa/test-inventory.json`. If that file is missing,
-fall back to `.claude-pipeline/01-tests.json`. **Do not guess the test
-command** — if neither file has it: **in CI mode** (`.claude-pipeline/run.json`
-exists with `"mode"` `"ci"`), write `.claude-pipeline/03-triage.json` with
-`"status": "failed"` and a `"reason"` explaining the test command couldn't be
-found, and stop. **Interactively**, stop and ask the user.
+Read `.qa/test-inventory.json`. **Check for a `stacks` object first** — if
+present, this is a multi-stack repo (see `/generate-tests`' multi-stack
+variant of this file): read every stack's `test_command` under
+`stacks.<name>.test_command`, there is no single top-level `test_command`
+to read in this shape. If `stacks` is absent, read the single top-level
+`test_command` as before.
+
+If `.qa/test-inventory.json` is missing entirely, fall back to
+`.claude-pipeline/01-tests.json` (same `stacks`-or-flat check applies
+there too). **Do not guess the test command** — if neither file has it (for
+any stack, in a multi-stack repo): **in CI mode**
+(`.claude-pipeline/run.json` exists with `"mode"` `"ci"`), write
+`.claude-pipeline/03-triage.json` with `"status": "failed"` and a
+`"reason"` explaining the test command couldn't be found, and stop.
+**Interactively**, stop and ask the user.
+
+**Run every stack, always.** Even if this CI run's `ci.targets` only
+touched one stack (that only matters to `/generate-tests`), run *every*
+stack's full suite here — a bug in a stack the PR didn't touch is still a
+bug, and skipping it would silently shrink triage's coverage every run.
 
 ### Step 3 — Run the tests
 
 Run the test command. Save the full raw output to
-`.claude-pipeline/raw-test-output.txt`.
+`.claude-pipeline/raw-test-output.txt`. **Multi-stack:** run each stack's
+test command separately (in that stack's own subtree/environment — they
+are typically incompatible runtimes), and save each stack's raw output to
+its own `.claude-pipeline/raw-test-output-<stack>.txt` (e.g.
+`raw-test-output-backend.txt`, `raw-test-output-frontend.txt`) instead of
+one combined file — two frameworks' output interleaved in one file is not
+reliably parseable.
 
 ### Step 4 — Extract every failure
 
 For each failing test, pull out: test name, file, error type, message, and
-stack trace/traceback.
+stack trace/traceback. **Multi-stack:** also record which stack each
+failure came from (the file path's stack, per Step 2) — Step 9's output
+schema carries a `"stack"` field per failure for exactly this.
 
 ### Step 5 — Read the rules and classify
 
@@ -237,6 +259,14 @@ gitignored, not committed.
 `"report_only": true` with the drafted content still fully present — a
 human reading this file must be able to see exactly what would have
 happened.
+
+**Multi-stack variant:** `totals` stays the sum across every stack; add a
+`totals_by_stack` object alongside it, keyed by stack name, each value the
+same `{tests, passed, failed}` shape. Every entry in `classifications`,
+`fixes_applied`, `issues_created`, and `issues_commented` carries a
+`"stack"` field naming which stack it came from, e.g.
+`{ "test": "test_require_user_access...", "file": "backend/tests/test_auth.py", "stack": "backend", "type": "COMPLEX", "reason": "..." }`.
+Nothing else in the schema changes.
 
 ---
 

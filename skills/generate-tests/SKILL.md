@@ -33,7 +33,7 @@ Read every file in `${CLAUDE_PLUGIN_ROOT}/rules/general/` and, once you know the
 every file in `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`. If there is no `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`
 folder for the detected language, say so and continue with `${CLAUDE_PLUGIN_ROOT}/rules/general/` only.
 
-### Step 2 — Work out the stack
+### Step 2 — Work out the stack(s)
 
 Look at manifest files in the target repo (`pyproject.toml`/`requirements.txt`,
 `package.json`, `pom.xml`/`build.gradle`, `go.mod`, `Cargo.toml`, `*.csproj`, etc.)
@@ -43,15 +43,34 @@ to determine:
   if none is configured yet)
 - the command that runs the tests
 
-If there is no test framework anywhere in the repo and none can be reasonably
-assumed, say so on screen, **write `.claude-pipeline/01-tests.json` with
-`"status": "failed"` and a `"reason"` explaining exactly what was missing**,
-and stop. Do not silently pick one for the user. Writing the file before
-stopping matters: `/test-pipeline`'s Stage 1 check (and a developer running
-this skill standalone) both depend on `01-tests.json` existing to know what
-happened — a stage that stops without writing anything looks identical to a
-crash, and the whole point of this project's file-based handoffs (PRD
-Section 6.5) is that nothing gets lost silently.
+**First, decide single-stack or multi-stack.** Most repos have exactly one
+manifest tree and one test command — that's the single-stack case, and
+everything below and in the rest of this skill works exactly as written.
+A repo is **multi-stack** (a monorepo) when it has more than one manifest
+file in sibling subtrees (not one nested inside another's `node_modules`/
+`vendor`/build output) that each define their own independent test setup —
+the common shape is a `backend/` with `requirements.txt`/`pyproject.toml`
+and a `frontend/` with its own `package.json`, each with its own test
+runner and its own source tree. Detect each stack independently — one
+language/framework/test command/test location per stack, found the same
+way as the single-stack case above but scoped to that stack's subtree.
+Give each stack a short, stable name (the top-level folder name is
+usually right — `backend`, `frontend`). This changes the shape of
+`.qa/test-inventory.json` and `.claude-pipeline/01-tests.json` — see the
+`stacks` variant of both schemas below — but nothing else in this skill's
+steps changes: Steps 3-12 all still apply per-stack, just run them once for
+each stack's targets instead of once for the whole repo.
+
+If there is no test framework anywhere in the repo (or, for a multi-stack
+repo, in a given stack) and none can be reasonably assumed, say so on
+screen, **write `.claude-pipeline/01-tests.json` with `"status": "failed"`
+and a `"reason"` explaining exactly what was missing**, and stop. Do not
+silently pick one for the user. Writing the file before stopping matters:
+`/test-pipeline`'s Stage 1 check (and a developer running this skill
+standalone) both depend on `01-tests.json` existing to know what happened
+— a stage that stops without writing anything looks identical to a crash,
+and the whole point of this project's file-based handoffs (PRD Section
+6.5) is that nothing gets lost silently.
 
 ### Step 3 — Work out where tests go
 
@@ -73,19 +92,36 @@ run — you will create it at the end.
 
 ### Step 5 — Pick what to test
 
-- If `.claude-pipeline/run.json` exists and its `ci.targets` array is
-  non-empty, test exactly those paths — this is CI's incremental mode,
-  targeting only the source files the PR actually changed. Skip the
+- If `.claude-pipeline/run.json` exists and its `ci.strategy` is
+  `"triage-only"`, **write nothing and stop** — `.qa/` already has a
+  baseline and this PR touched no source, so there is nothing new to
+  generate. Write `.claude-pipeline/01-tests.json` with `"status": "ok"`,
+  empty `files_created`/`files_modified`, and a note that this run was
+  triage-only, so downstream stages (and `/test-pipeline`'s Stage 1 check)
+  see a normal completion rather than a failure. Do not fall through to
+  the whole-repo ranking below — an empty `ci.targets` here means
+  "nothing changed," not "no target given."
+- Otherwise, if `.claude-pipeline/run.json` exists and its `ci.targets`
+  array is non-empty, test exactly those paths — this is CI's incremental
+  mode, targeting only the source files the PR actually changed. Skip the
   ranking below entirely.
 - Otherwise, if the user gave a target (`$ARGUMENTS`), use exactly that.
 - Otherwise (no CI targets, no `$ARGUMENTS` — whole-repo bootstrap, local or
   CI), list every source module with no corresponding test file (per the
   inventory, or by scanning if there is no inventory yet). Rank them: business
   logic and entry points first, config/constants/simple data classes last. Take
-  the top 20.
+  the top 20 — **per stack** in a multi-stack repo (top 20 for `backend`,
+  separately top 20 for `frontend`), not top 20 across the whole repo, so a
+  large stack can't crowd out a smaller one entirely.
 - A module that is genuinely untestable in isolation (needs live network, a real
   external system, etc., with no reasonable seam to mock) is recorded as skipped
   with a `skipped_reason` — it is not silently dropped, and it is not forced.
+- **Multi-stack repos:** whatever the target list above ends up being (CI
+  targets, `$ARGUMENTS`, or the ranked list), group it by which stack each
+  path falls under before Step 6. Steps 6-13 then run once per stack, using
+  that stack's own test command, dependency graph, and house style — a
+  frontend test file must never be written using the backend's test
+  framework's conventions, or vice versa.
 
 ### Step 6 — Read the dependencies
 
@@ -182,12 +218,22 @@ learned in Step 7 and using the builders from Step 8.
 ### Step 13 — Get coverage
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/parse_coverage.py` against the test run's coverage output to get a
-clean per-module coverage JSON.
+clean per-module coverage JSON. **Multi-stack:** run it once per stack,
+against that stack's own coverage output — never combine two stacks'
+coverage reports into one parse_coverage.py run, their module paths and
+tooling don't line up.
 
 ### Step 14 — Update the inventory and write scratch output
 
 Update `.qa/test-inventory.json` in place (never wholesale-rewrite unless
-`--rebuild` was passed) and write `.claude-pipeline/01-tests.json`.
+`--rebuild` was passed) and write `.claude-pipeline/01-tests.json`. In a
+multi-stack repo, use the `stacks` variant of both schemas below. This run
+may only have worked on one stack's targets (that's expected and fine —
+incremental CI targets or a user-given `$ARGUMENTS` often only touch one)
+— but still preserve every other stack's existing `stacks.<name>` metadata
+entry (`language`/`framework`/`test_command`/`test_location`/`coverage`)
+byte-for-byte rather than dropping it, so the inventory never loses a
+stack it isn't currently touching.
 
 ---
 
@@ -238,6 +284,71 @@ Update `.qa/test-inventory.json` in place (never wholesale-rewrite unless
 }
 ```
 
+### Multi-stack variant — `.qa/test-inventory.json`
+
+Same file, same purpose. The only difference: `language`/`framework`/
+`test_command`/`test_location`/`coverage` move off the top level and into a
+`stacks` object, one entry per stack, and each module in the flat
+`modules` array carries a `"stack"` field naming which one it belongs to.
+Everything else (`builders`, `changelog`, `generated_by_qa`) is unchanged.
+
+```json
+{
+  "schema_version": 1,
+  "last_updated": "2026-09-07T00:00:00Z",
+  "last_updated_sha": "f935d81",
+  "stacks": {
+    "backend": {
+      "language": "python",
+      "framework": "pytest",
+      "test_command": "cd backend && pytest -q --cov=app --cov-report=xml",
+      "test_location": "backend/tests/",
+      "coverage": { "total": 44.9, "measured_at_sha": "f935d81" }
+    },
+    "frontend": {
+      "language": "typescript",
+      "framework": "jest",
+      "test_command": "cd frontend && npm test -- --coverage --coverageReporters=cobertura",
+      "test_location": "frontend/__tests__/",
+      "coverage": { "total": 73.1, "measured_at_sha": "f935d81" }
+    }
+  },
+  "modules": [
+    {
+      "source": "backend/app/orders.py",
+      "stack": "backend",
+      "test_file": "backend/tests/test_orders.py",
+      "test_count": 12,
+      "coverage": 82.1,
+      "generated_by_qa": true,
+      "last_touched_sha": "f935d81"
+    },
+    {
+      "source": "frontend/lib/auth.ts",
+      "stack": "frontend",
+      "test_file": "frontend/__tests__/auth.test.ts",
+      "test_count": 14,
+      "coverage": 98.0,
+      "generated_by_qa": true,
+      "last_touched_sha": "f935d81"
+    }
+  ],
+  "builders": [
+    { "file": "backend/tests/conftest.py", "provides": ["order_factory"] }
+  ],
+  "changelog": [
+    "2026-09-07 f935d81 — added tests for backend/orders.py, frontend/lib/auth.ts"
+  ]
+}
+```
+
+Use this shape as soon as Step 2 finds more than one stack — do not force
+a monorepo into the single top-level `test_command` shape, and do not use
+`stacks` for a genuinely single-stack repo (`/triage-tests` and
+`/build-context` check for the presence of `stacks` to decide which shape
+they're reading, so an unnecessary `stacks` wrapper around one stack would
+just make every downstream read more complicated for no reason).
+
 The `generated_by_qa` flag is load-bearing: it marks which tests this pipeline owns
 and may later edit (in `/triage-tests`), and which a human wrote and must never be
 touched. Get it right — set it `true` only for a test file this run created or
@@ -275,6 +386,50 @@ added generated tests into, and never flip an existing `false` to `true`.
 `tests_removed` and `tests_flagged_as_possible_bugs` are never the same test. The first is a
 test this skill judged to be its own mistake and discarded. The second is a test this skill
 stands behind, left in the suite, failing on purpose.
+
+### Multi-stack variant — `.claude-pipeline/01-tests.json`
+
+Same idea as the inventory: `language`/`framework`/`test_command`/
+`test_location`/`coverage` move under a `stacks` object, and
+`files_created`/`files_modified`/`modules_skipped`/`tests_removed`/
+`tests_flagged_as_possible_bugs` stay as single flat lists across every
+stack (each entry's path already says which stack it's in — no need to
+duplicate that structurally).
+
+```json
+{
+  "status": "ok",
+  "git_sha": "f935d81",
+  "stacks": {
+    "backend": {
+      "language": "python",
+      "framework": "pytest",
+      "test_command": "cd backend && pytest -q --cov=app --cov-report=xml",
+      "test_location": "backend/tests/",
+      "coverage": { "before": 23.9, "after": 44.9 }
+    },
+    "frontend": {
+      "language": "typescript",
+      "framework": "jest",
+      "test_command": "cd frontend && npm test -- --coverage --coverageReporters=cobertura",
+      "test_location": "frontend/__tests__/",
+      "coverage": { "before": 30.1, "after": 73.1 }
+    }
+  },
+  "files_created": ["backend/tests/test_inventory_data.py", "frontend/__tests__/branding.test.ts"],
+  "files_modified": [],
+  "modules_skipped": [
+    { "path": "backend/app/data/db_store.py", "reason": "DB-cursor-coupled, no live Postgres in test env" }
+  ],
+  "tests_removed": [],
+  "tests_flagged_as_possible_bugs": [],
+  "notes": "Ran per stack: backend via pytest, frontend via jest. See per-stack test_command above."
+}
+```
+
+A triage-only CI run (Step 5) writes this same `"status": "ok"` shape with
+every stack's `files_created`/`files_modified` empty — never `"status":
+"failed"` just because there was nothing to generate.
 
 If an input this skill needs is missing and it cannot be worked out (e.g. no test
 framework detectable, no manifest file at all), set `"status": "partial"` and add

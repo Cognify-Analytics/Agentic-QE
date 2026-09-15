@@ -17,6 +17,16 @@ on:
         required: false
         type: string
         default: main
+      node_version:
+        description: Node version to set up. Leave empty for repos with no JS/TS stack.
+        required: false
+        type: string
+        default: ''
+      max_turns:
+        description: Turn budget for the Claude run. Raise for large or multi-stack repos.
+        required: false
+        type: number
+        default: 150
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -60,9 +70,16 @@ jobs:
       - name: Keep scratch out of the diff
         run: printf '%s\n' '.claude-pipeline/' '.agentic-qe/' >> .git/info/exclude
 
+      # Always set up Python: scripts/parse_coverage.py and scripts/resolve_owners.py
+      # need it even when the target repo has no Python stack of its own.
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        if: inputs.node_version != ''
+        with:
+          node-version: ${{ inputs.node_version }}
 
       - name: Install target repo dependencies
         run: ${{ inputs.setup_script }}
@@ -128,14 +145,18 @@ jobs:
                        "GH_REPO":  "${{ github.repository }}" } }
           claude_args: |
             --plugin-dir ./.agentic-qe
-            --max-turns 150
+            --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash"
 
       - name: Assert no production source was changed
         if: always()
         run: |
           set -euo pipefail
-          LOC=$(jq -r '.test_location // "tests/"' .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
+          # Multi-stack repos (see skills/generate-tests's "stacks" schema) have no single
+          # top-level test_location — join every stack's instead. Falls back to "tests/" if
+          # 01-tests.json is missing/malformed (e.g. the run failed before writing it).
+          LOC=$(jq -r 'if has("stacks") then ([.stacks[].test_location] | join("|")) else (.test_location // "tests/") end' \
+                .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
           BAD=$(git status --porcelain | awk '{print $2}' \
                 | grep -Ev "^(${LOC}|\.qa/|\.claude-pipeline/)" || true)
           if [ -n "$BAD" ]; then

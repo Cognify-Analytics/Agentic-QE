@@ -53,6 +53,11 @@ last_updated: {yyyy-mm-dd}
   update logic for exactly how this is enforced line-by-line.
 - **Coverage numbers always come from `.qa/test-inventory.json`.** Never
   recompute them.
+- **Multi-stack repos** (`.qa/test-inventory.json` has a top-level `stacks`
+  object rather than a single `test_command`) get a subheading per stack
+  inside section 4 (e.g. `### Backend (pytest)`, `### Frontend (jest)`),
+  each with its own %, well/weakly/not-covered breakdown, and known gaps.
+  Never collapse two stacks into one combined percentage.
 - **1,500 words, hard limit.** `/triage-tests` loads this whole file into
   its own context on every run — keep it dense, not exhaustive. Prefer a
   short accurate sentence over a long hedge.
