@@ -188,6 +188,7 @@ jobs:
         if: always()
         with:
           name: qa-pipeline-${{ github.run_id }}
+          include-hidden-files: true
           path: |
             .claude-pipeline/
             .qa/
