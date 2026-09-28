@@ -119,3 +119,44 @@ or merges into a default branch.
 See `PLAN-github-action-v1.md` for the full design, the `run.json` schema
 the workflow and skills share, and the build order this was verified
 against.
+
+## Cost and telemetry
+
+A run's cost is driven by **token volume and turn count, not model price**.
+The pipeline is built around that: most PRs change no source file, and on
+those runs it now skips work rather than doing it cheaply.
+
+**What gets skipped, and when:**
+
+| Situation | Effect |
+|---|---|
+| PR changes no source file (`strategy: triage-only`) | `/generate-tests` is never invoked — the orchestrator writes its completion record directly instead of forking a subagent that would load ~15k tokens of rules to do nothing |
+| No doc/manifest/schema file changed, and no new tests were written | `/build-context` is never invoked — it would otherwise regenerate all four sections from the whole repo just to discover nothing changed |
+| Test suite passes cleanly | `/triage-tests` reads only the totals, never the full output — the raw log is still saved for the artifact |
+
+`/generate-tests` also loads its rules in two tiers: the seven that decide
+what gets written are always read, and the rest only when the target
+actually calls for them.
+
+**What gets measured.** Every CI run produces `telemetry.json` with cost,
+turns, token usage, strategy, and which stages ran versus were skipped.
+It's surfaced in three places:
+
+- the job summary, as a table plus the full JSON
+- the sticky PR comment footer (`$0.42 · 31 turns · strategy triage-only`)
+- a `qa-telemetry-<run_id>` artifact, retained 90 days — longer than the
+  14-day scratch artifact, because cost trends only become readable across
+  dozens of runs
+
+The committed run record in `.qa/runs/<date>-<sha>.json` carries the
+strategy and per-stage outcomes too. Join it to a `telemetry.json` on
+`sha` to get the full picture — the cost figures can only come from the CI
+side, since a run has no way to observe its own token spend from inside.
+
+**If you want to tune further:** the `model` input sets `--model` for the
+whole pipeline. Measure before reaching for it — an Opus→Sonnet swap
+observed here moved a run from $1.90 to $1.19, far less than the ~5x
+price difference would suggest, which is exactly what tells you the run is
+volume-bound rather than price-bound. Note also that `max_turns` is a
+ceiling that stops a runaway run; lowering it does not make a normal run
+cheaper.

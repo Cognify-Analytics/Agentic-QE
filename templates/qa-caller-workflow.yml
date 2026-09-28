@@ -20,7 +20,13 @@ jobs:
       live: false
       plugin_ref: main
       # node_version: '20'   # only if the repo has a JS/TS stack
-      # max_turns: 200       # raise for large or multi-stack repos
+      # max_turns: 200       # ceiling that stops a runaway run; raise for large or
+      #                      # multi-stack repos. Lowering it does NOT cut normal cost.
+      # model: claude-sonnet-5
+      #                      # pins the whole pipeline to one model. Check the run's
+      #                      # telemetry (job summary / PR comment footer) before and
+      #                      # after — cost here is usually bound by token volume,
+      #                      # not model price. See README "Cost and telemetry".
       # fix_bugs: true       # opt-in, off by default: let /triage-tests attempt a
       #                      # verified fix to production source for a narrow set of
       #                      # documented bugs and open a second PR linked to the

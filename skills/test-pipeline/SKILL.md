@@ -92,7 +92,8 @@ before this skill is invoked — see this repo's
     "pr_base_branch": "feature/refunds",
     "run_url": "https://github.com/org/repo/actions/runs/123",
     "strategy": "incremental",
-    "targets": ["src/orders.py", "src/pricing.py"]
+    "targets": ["src/orders.py", "src/pricing.py"],
+    "context_inputs_changed": true
   }
 }
 ```
@@ -107,20 +108,55 @@ real work). `ci.pr_base_branch` is where `/triage-tests` should base its
 auto-fix PR — always the PR's own head branch, never the repo's default
 branch, so the fix flows back into the developer's own PR.
 
+`ci.context_inputs_changed` is the workflow's answer to "did any file
+`/build-context` reads from change in this PR?" — docs, manifests, schema
+and model files. `false` is what lets Stage 2 be skipped outright (see
+Stage 2 for the other two conditions that must hold alongside it). It is
+deliberately conservative: when the workflow can't compute a base diff at
+all (e.g. `workflow_dispatch`), it reports `true` and nothing is skipped.
+A missing field means `true` — never treat absence as permission to skip.
+
 ---
 
 ## Stage 1 — `/generate-tests`
 
-Invoke it with the Skill tool (forwarding any target from `$ARGUMENTS`).
+**Skip the invocation entirely when this is a CI run whose `ci.strategy` is
+`"triage-only"`.** That strategy means the workflow already proved this PR
+changed no source file, so `/generate-tests` has nothing to generate — and
+forking a subagent that reads every rule file before deciding to write
+nothing is the most expensive no-op in this pipeline. Write its completion
+record yourself instead (you have `Write`), then go straight to Stage 2:
+
+```json
+{
+  "status": "ok",
+  "git_sha": "<sha from run.json>",
+  "files_created": [],
+  "files_modified": [],
+  "modules_skipped": [],
+  "tests_removed": [],
+  "tests_flagged_as_possible_bugs": [],
+  "notes": "Triage-only run — no source files changed, so /generate-tests was not invoked. Stage skipped by the orchestrator."
+}
+```
+
+This is the same `"status": "ok"` shape `/generate-tests` would have
+written for a triage-only run itself (its Step 5), so every downstream
+reader — the check below, `summary.md`, the run record — behaves exactly as
+before. Record it as `"skipped:triage-only"` in `stages.json` (see Finish).
+
+Otherwise, invoke it with the Skill tool (forwarding any target from
+`$ARGUMENTS`).
 
 **Check before continuing:**
 - Does `.claude-pipeline/01-tests.json` exist, and is its `"status"` not
   `"failed"`?
 - **Unless this is a CI run with `ci.strategy` `"triage-only"`** (in which
-  case `/generate-tests` deliberately wrote nothing and `.qa/` is
-  unchanged by design — skip this second check): has
-  `.qa/test-inventory.json` actually been updated (its `last_updated_sha`
-  matches this run's `sha` from `run.json`)?
+  case nothing was generated and `.qa/` is unchanged by design — whether
+  you wrote the stub above or `/generate-tests` stopped at its own Step 0
+  — so skip this second check): has `.qa/test-inventory.json` actually
+  been updated (its `last_updated_sha` matches this run's `sha` from
+  `run.json`)?
 
 **If either applicable check fails: stop the whole pipeline right here.**
 Do not run Stage 2 or 3. Report exactly which check failed and show
@@ -131,8 +167,29 @@ real to triage.
 
 ## Stage 2 — `/build-context`
 
-Invoke it with the Skill tool. No target to forward — it always looks at
-the whole repo.
+**Skip the invocation entirely when all three of these hold:**
+
+1. This is a CI run and `run.json`'s `ci.context_inputs_changed` is
+   `false` — the workflow diffed the PR and found no doc, manifest, or
+   schema file changed, so sections 1-3 of `context.md` cannot have
+   changed.
+2. `.qa/context.md` already exists and has real content (the same check
+   you would otherwise run *after* the stage).
+3. Stage 1 changed nothing — `01-tests.json`'s `files_created` and
+   `files_modified` are both empty. New tests move coverage, coverage is
+   section 4, and this condition is what stops a skipped Stage 2 from
+   leaving a stale number behind.
+
+If all three hold: say "Context is current (inputs unchanged — stage
+skipped)." on screen, leave `.qa/context.md` byte-for-byte alone, record
+`"skipped:inputs-unchanged"` in `stages.json`, and move to Stage 3. Do not
+invoke the skill. Without this gate the skill regenerates all four
+sections from the whole repo on every run just to discover nothing
+changed — correct, but the most expensive possible way to reach that
+answer.
+
+If any one of them does not hold, invoke it with the Skill tool. No target
+to forward — it always looks at the whole repo.
 
 **Check before continuing:** does `.qa/context.md` exist and have content
 (not just a header with empty sections)? Note: if `/build-context` correctly
@@ -160,16 +217,39 @@ happened if it didn't produce output.)
 
 ## Finish
 
-1. Read `run.json`, `01-tests.json`, `.qa/context.md`, and `03-triage.json`.
-2. Write `.claude-pipeline/summary.md` (shape below).
-3. Copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
+1. **Write `.claude-pipeline/stages.json` first** (shape below) — before the
+   summary, so it survives even if a later step here fails. This is the
+   only record of which stages actually ran versus were skipped, and the
+   workflow's telemetry step reads it to fold that into the run's cost
+   data. **If the pipeline stops early at any stage gate above, write this
+   file before stopping**, with the stages that did run and
+   `"not_reached"` for the rest.
+2. Read `run.json`, `01-tests.json`, `.qa/context.md`, and `03-triage.json`.
+3. Write `.claude-pipeline/summary.md` (shape below).
+4. Copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
    full scratch detail, just enough for a team to see pipeline history at a
    glance (see schema below). Create `.qa/runs/` if it doesn't exist.
-4. Remind the developer on screen to commit `.qa/context.md`,
+5. Remind the developer on screen to commit `.qa/context.md`,
    `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and every test file
    `01-tests.json` listed under `files_created`/`files_modified`. This
    pipeline never commits on its own (Section 9, Rule 5/6 — commits and
    merges are for people).
+
+**Expected — `.claude-pipeline/stages.json` (scratch, read by CI telemetry):**
+
+```json
+{
+  "generate_tests": "skipped:triage-only",
+  "build_context": "skipped:inputs-unchanged",
+  "triage_tests": "ran"
+}
+```
+
+Each value is one of `"ran"`, `"not_reached"` (the pipeline stopped before
+it), or `"skipped:<reason>"` — use exactly `"skipped:triage-only"` (Stage 1)
+and `"skipped:inputs-unchanged"` (Stage 2) for the two gates above, so runs
+stay comparable to each other over time. Do not invent new reason strings
+for those two cases.
 
 **Expected — `.claude-pipeline/summary.md`:**
 
@@ -206,6 +286,12 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
   "sha": "a1b2c3d",
   "branch": "feature/refunds",
   "mode": "report-only",
+  "strategy": "incremental",
+  "stages": {
+    "generate_tests": "ran",
+    "build_context": "ran",
+    "triage_tests": "ran"
+  },
   "coverage": { "before": 51.0, "after": 67.4 },
   "tests_created": 2,
   "tests_modified": 1,
@@ -222,6 +308,13 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 `bug_fix_prs` is the count of `bug_fix_prs_created` entries with a non-null
 `pr_url` (i.e. actually opened, not report-only) — always `0` unless
 `fix_bugs` was on for this run.
+
+`strategy` and `stages` mirror what you wrote to `stages.json`, and are the
+durable half of this pipeline's telemetry: `.qa/runs/` is committed, so
+these accumulate into real history a team can look back over, while the
+cost figures live only in the CI run (you have no way to see your own token
+spend from inside the run). Pair them by `sha` when analyzing — that's the
+join key between a run record here and a `telemetry.json` from CI.
 
 **Multi-stack repos** (`01-tests.json`/`03-triage.json` have a `stacks`
 shape — see `/generate-tests`): report coverage and triage totals **per

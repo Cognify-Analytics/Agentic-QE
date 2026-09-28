@@ -99,16 +99,41 @@ bug, and skipping it would silently shrink triage's coverage every run.
 
 ### Step 3 — Run the tests
 
-Run the test command. Save the full raw output to
-`.claude-pipeline/raw-test-output.txt`. **Multi-stack:** run each stack's
-test command separately (in that stack's own subtree/environment — they
-are typically incompatible runtimes), and save each stack's raw output to
-its own `.claude-pipeline/raw-test-output-<stack>.txt` (e.g.
+**Redirect the output to a file; never let the full run stream into your
+context.** A passing suite's output can run to thousands of lines, and
+every one of them would be tokens spent to learn "nothing failed."
+
+Run the test command with its output redirected to
+`.claude-pipeline/raw-test-output.txt` and capture the exit code, e.g.
+`<test command> > .claude-pipeline/raw-test-output.txt 2>&1; echo "exit=$?"`.
+Then read **only the tail** (the last ~15 lines) to get the totals line.
+
+**Multi-stack:** run each stack's test command separately (in that stack's
+own subtree/environment — they are typically incompatible runtimes), and
+save each stack's raw output to its own
+`.claude-pipeline/raw-test-output-<stack>.txt` (e.g.
 `raw-test-output-backend.txt`, `raw-test-output-frontend.txt`) instead of
 one combined file — two frameworks' output interleaved in one file is not
-reliably parseable.
+reliably parseable. Capture one exit code per stack.
+
+**If every stack exited 0 (a green suite): stop here.** There are no
+failures to classify, so Steps 4 through 8.5 have nothing to act on. Record
+the totals from the tail you already read, skip to Step 9, and write
+`03-triage.json` with empty `classifications`/`fixes_applied`/
+`issues_created`. Do **not** read the raw output file — it is kept on disk
+for the CI artifact (so a disputed run is still arguable after the fact),
+not for you to load. In a CI run, `.qa/` may still have changes to commit,
+so Step 8 still applies even on a green suite; go there, then Step 9.
 
 ### Step 4 — Extract every failure
+
+*(Only reached when at least one stack failed — see Step 3.)*
+
+**Pull out failures with targeted searches, not by reading the whole
+file.** Grep the raw output for the framework's failure markers (`FAILED`,
+`FAIL `, `Error:`, `--- FAIL:`, `✕`, etc.) to get the list, then read only
+the surrounding block for each one — reading a 5,000-line log to find 3
+failures costs far more than 3 targeted reads.
 
 For each failing test, pull out: test name, file, error type, message, and
 stack trace/traceback. **Multi-stack:** also record which stack each

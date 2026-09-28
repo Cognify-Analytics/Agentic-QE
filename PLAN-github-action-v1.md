@@ -477,3 +477,61 @@ least one human approval" changes from *strongly recommended* to a
 precondition worth stating outright before anyone flips `fix_bugs: true`
 in the caller workflow — see the reusable workflow's `fix_bugs` input
 description and README, "Set it up in a target repo," step 5.
+
+---
+
+## Addendum — cost optimization and telemetry
+
+Measured runs came in at ~$1.90 (Opus) and ~$1.19 (Sonnet). The gap being
+only 37%, where the per-token price difference is ~5x, says the pipeline is
+**bound by token volume and turn count, not model price**. Changes made in
+response, in rough order of expected impact:
+
+**1. `triage-only` no longer forks two subagents to do nothing.** The
+strategy table above notes `triage-only` "costs almost nothing" — that was
+optimistic. It still forked `/generate-tests`, which reads ~15k tokens of
+rules across ~20 sequential reads *before* Step 5 tells it there is nothing
+to generate, and `/build-context`, which regenerates all four sections from
+the whole repo to diff them. The orchestrator now writes the `01-tests.json`
+stub itself and skips both invocations. `/generate-tests` also gained a
+Step 0 early-exit as a backstop for direct invocation.
+
+**2. `/build-context` is gated on a diff it can't compute itself.** The
+plan step already produced a changed-file list for `ci.targets` and threw
+away everything that wasn't source. It now also reports
+`ci.context_inputs_changed` — whether any doc, manifest, schema or model
+file changed. The orchestrator skips Stage 2 when that's `false`, the
+context file exists, *and* Stage 1 wrote no tests (new tests move coverage,
+which is section 4). Conservative by construction: no base diff (e.g.
+`workflow_dispatch`) reports `true` and nothing is skipped.
+
+**3. Rules load in tiers, batched.** Seven files decide what gets written
+and are always read; ten are read only when the target calls for them. The
+skill now also says to read each tier as one parallel batch — seventeen
+sequential reads don't just cost seventeen turns, they write a new prompt
+cache prefix each time, which is the more expensive half.
+
+**4. A green suite no longer loads its own output.** `/triage-tests`
+redirects test output to a file, reads the tail for totals, and stops if
+everything passed. The raw log is still written for the artifact.
+
+### Telemetry
+
+`claude-code-action` was running with no `id:`, so nothing captured what a
+run spent. The step now has `id: claude`, and a following step parses its
+execution log into `.claude-pipeline/telemetry.json`: cost, turns,
+duration, token usage, strategy, model, and per-stage ran/skipped outcomes
+(from `stages.json`, written by the orchestrator). It surfaces in the job
+summary, the sticky PR comment footer, and a 90-day artifact.
+
+The parse searches the log recursively for the object carrying
+`total_cost_usd` rather than assuming a fixed shape, and the whole step
+exits 0 unconditionally — an action upgrade that reshapes the log costs a
+data point, not a run.
+
+**Known limitation:** cost can only be observed from the CI side, after the
+model has finished, so it can't be written into the committed
+`.qa/runs/<date>-<sha>.json`. That record carries the strategy and stage
+outcomes instead; join it to a `telemetry.json` on `sha` for the full
+picture. Closing that gap would mean a second commit-and-push after the
+action completes, racing the auto-fix PR — not worth the fragility.

@@ -27,11 +27,63 @@ the stack, don't assume one.
 
 ## Instructions
 
+### Step 0 — Is there anything to do at all?
+
+**Do this before reading anything else.** If `.claude-pipeline/run.json`
+exists and its `ci.strategy` is `"triage-only"`, this run has no targets —
+write the `"status": "ok"` triage-only `01-tests.json` described in Step 5
+and **stop here**, before loading a single rule file.
+
+The rules below are ~15k tokens. Loading them and *then* discovering there
+is nothing to generate is the most expensive way to do nothing this
+pipeline has. (In CI, `/test-pipeline` should have skipped invoking you at
+all in this case — this step is the backstop for a direct invocation, and
+for when the orchestrator's own gate is bypassed.)
+
 ### Step 1 — Read the rules
 
-Read every file in `${CLAUDE_PLUGIN_ROOT}/rules/general/` and, once you know the language (Step 2),
-every file in `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`. If there is no `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`
-folder for the detected language, say so and continue with `${CLAUDE_PLUGIN_ROOT}/rules/general/` only.
+**Read them in tiers, and read each tier as one batch of parallel reads —
+not one file per turn.** Every sequential read re-sends the whole
+conversation and writes a new prompt-cache prefix; seventeen of them in a
+row costs many times what the same content costs fetched together.
+
+**Tier 1 — always, before writing any test.** These decide what gets
+written and where:
+
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/technology-stack-detection.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/test-case-generation-strategy.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/naming-conventions.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/general-principles.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/what-makes-good-test.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md`
+- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md`
+- every file in `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`, once Step 2
+  has told you the language (if there's no folder for it, say so and carry
+  on with `general/` only)
+
+**Tier 2 — read the ones that apply to what you're actually about to
+write**, in a single batch once you know the shape of the target (after
+Step 6). Each line says when it earns its place:
+
+| File | Read it when |
+|---|---|
+| `cleanly-create-test-data.md` | the target needs non-trivial test data, fixtures, or builders |
+| `keep-cause-effect-clear.md` | tests will have multi-step setup |
+| `keep-tests-focused.md` | a target has many branches and tests risk sprawling |
+| `no-logic-in-tests.md` | you're tempted by a loop, conditional, or computed expected value |
+| `test-behaviors-not-methods.md` | the target is a class/module with several public methods |
+| `prefer-public-apis.md` | the target exposes internals you could reach for |
+| `verify-relevant-arguments-only.md` | the tests will assert on mocks/spies |
+| `json-serialization.md` | the target produces or consumes JSON payloads |
+| `compilation-verification.md` | before Step 12's compile phase |
+| `test-execution-verification.md` | before Step 12's run phase |
+
+**When in doubt, read it.** A rule skipped is worse than a rule read — the
+tiering exists to avoid loading obviously-irrelevant guidance (JSON rules
+for a target that never touches JSON), not to ration what you need to write
+a correct test. If you find yourself unsure whether a Tier 2 file applies,
+that uncertainty is itself the signal to read it.
 
 ### Step 2 — Work out the stack(s)
 
@@ -465,12 +517,22 @@ naming/location conventions.
 
 ## Rules reference
 
-Always read, regardless of language:
+See Step 1 for when each tier gets read. This section is the index, Step 1
+is the loading rule — they must agree.
+
+**Tier 1 — always, as one batch:**
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/technology-stack-detection.md` — detect language/framework/test command
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/test-case-generation-strategy.md` — INCLUDE/EXCLUDE criteria for test cases
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/naming-conventions.md` — `{method}_{state}_{outcome}` format
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/general-principles.md` — Given-When-Then, actual/expected, determinism, minimal mocking
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/what-makes-good-test.md` — Clarity, Completeness, Conciseness, Resilience
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md` — extend, don't duplicate
+- `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md` — read the full dependency graph first
+- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD
+- everything under `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/` for the detected language (for
+  example `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`)
+
+**Tier 2 — when the target calls for it** (Step 1's table says when):
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md` — helpers and builders over inline construction
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/keep-cause-effect-clear.md` — setup next to its assertions
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/no-logic-in-tests.md` — no conditionals/loops/computed values in a test body
@@ -478,14 +540,6 @@ Always read, regardless of language:
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/test-behaviors-not-methods.md` — organize by observable behavior
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/verify-relevant-arguments-only.md` — don't over-specify mock verification
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/prefer-public-apis.md` — test through public interfaces
-- `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md` — extend, don't duplicate
-- `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md` — read the full dependency graph first
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/json-serialization.md` — no computed/derived expected payloads
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/compilation-verification.md` — Step 12, compile/build phase
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/test-execution-verification.md` — Step 12, run phase; fix tests, never production code
-
-Then, for the detected language, everything under `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/` (for
-example `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`).
-
-And always:
-- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD
