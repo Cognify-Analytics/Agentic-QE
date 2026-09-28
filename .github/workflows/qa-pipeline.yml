@@ -195,12 +195,15 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
           prompt: '/agentic-qe:test-pipeline'
           track_progress: false
           settings: |
             { "env": { "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
                        "GH_REPO":  "${{ github.repository }}" } }
           claude_args: |
+            --model sonnet
             --plugin-dir ./.agentic-qe
             --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash"
@@ -333,6 +336,7 @@ jobs:
         if: always()
         with:
           name: qa-pipeline-${{ github.run_id }}
+          include-hidden-files: true
           path: |
             .claude-pipeline/
             .qa/
