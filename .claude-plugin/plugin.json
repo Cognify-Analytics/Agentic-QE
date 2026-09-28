@@ -2,7 +2,7 @@
   "name": "agentic-qe",
   "displayName": "Agentic QE",
   "description": "Skills that write unit tests, document a codebase, run the tests, and triage failures — entirely inside Claude Code.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Cognify Analytics"
   },

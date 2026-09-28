@@ -12,6 +12,19 @@ on:
         required: false
         type: boolean
         default: false
+      fix_bugs:
+        description: >-
+          Opt-in, off by default. Let /triage-tests attempt an actual, narrowly-scoped
+          fix to production source for a small subset of COMPLEX bugs (only those backed
+          by a specific documented expectation — see rules/error-classification.md),
+          verify it against the full suite, and open a second PR linked to the issue
+          ("Relates to #N", never auto-closing it). Works independently of `live`:
+          with `live: false` it only computes and reports what it would fix. Requires
+          branch protection with required human review on the target branch before
+          turning this on for real — see README "Set it up in a target repo".
+        required: false
+        type: boolean
+        default: false
       plugin_ref:
         description: Agentic-QE tag/ref to pin the plugin checkout to.
         required: false
@@ -127,8 +140,9 @@ jobs:
             --argjson targets "$TARGETS" \
             --argjson pr "${{ github.event.pull_request.number || 'null' }}" \
             --argjson live "${{ inputs.live && 'true' || 'false' }}" \
+            --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
-            { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live,
+            { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
               ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
                     strategy:$strategy, targets:$targets } }' > .claude-pipeline/run.json
 

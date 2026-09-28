@@ -1,6 +1,6 @@
 # PRD — Agentic QE - Claude Code Skill
 
-**Version:** 1.1
+**Version:** 1.2
 **What we are building:** A set of Claude Code skills that write unit tests, document a codebase, run the tests, and decide what each failure means.
 **Where it runs:** Entirely inside Claude Code. No server. No hosted service.
 
@@ -64,6 +64,7 @@ That comment is where real defects disappear. **Part 3 is the reason this projec
 - Any interface other than the terminal
 - Merging its own pull requests
 - Changing production source code — this is a hard rule, see Section 9
+  (a narrow, off-by-default opt-in exception was added later; see Section 9.1)
 
 ---
 
@@ -683,6 +684,60 @@ These are not negotiable. Write them into every skill they apply to.
 7. **A suspected bug gets an issue, not a comment.** The reference tool leaves a `// might be a bug` note and moves on. That note is exactly the failure we are here to fix.
 8. **Every limit is a hard stop** and gets recorded in `caps_hit`.
 9. **In CI, keep the tool list small** and always set `--max-turns`.
+
+---
+
+## 9.1 Opt-in exception to Rule 1 — bug-fix mode (v1.2, off by default)
+
+Rule 1 above is the default for this project and stays the default for
+anyone who doesn't explicitly turn on `fix_bugs`. This section documents
+the one deliberate, narrow exception, added at explicit user request after
+v1.0 shipped: a team may opt in to having `/triage-tests` write an actual
+fix to production source for a narrow class of COMPLEX bugs, verify it,
+and open a **second, separate pull request** linked to the issue Rule 7
+already produced — never merged by the pipeline (Rule 6 is untouched).
+
+The point of this mode is to close the loop the rest of this document
+deliberately leaves open: today, a real bug gets an issue and a human has
+to write the fix from scratch. `fix_bugs` lets the pipeline hand that human
+a candidate fix to review instead of a blank issue — without weakening any
+of the guarantees Section 9 exists to provide.
+
+Guardrails that make this a bounded exception rather than a reopening of
+Rule 1 generally:
+
+- **Off by default, explicit opt-in per run** (`--fix-bugs` / `run.json`'s
+  `"fix_bugs"` field). Never inferred from context, never turned on by a
+  missing field.
+- **Narrow eligibility.** Only COMPLEX failures backed by a specific
+  documented expectation — a `.qa/context.md` line, a docstring, or
+  adjacent docs — that the code contradicts. Never timing/race conditions,
+  never integration-boundary failures, never a human-written test, never
+  an AMBIGUOUS failure. See `rules/error-classification.md`'s "Eligible
+  for opt-in bug-fix mode?" column.
+- **Scoped and capped.** Smallest possible change; abandoned if it would
+  touch more than 2 files or any file the failure's own stack trace
+  doesn't point to. 2 verification attempts. 3 bug-fix PRs per run.
+- **Verified, not guessed.** Both the specific failing test and the whole
+  stack's suite must pass clean before a PR is opened. An attempt that
+  can't get there is undone completely and falls back to issue-only.
+- **Never auto-closes its issue.** The PR says "Relates to #N", never
+  "Fixes #N" — merging the PR is not the same event as a human deciding
+  the bug is actually resolved, and GitHub's auto-close-on-merge keyword
+  would conflate the two.
+- **A second, clearly-labeled PR.** A bug-fix PR is never combined with
+  the routine SIMPLE-test-fix PR (Section 7.3, Step 8) — a reviewer must
+  be able to accept one without the other, since they carry different
+  review burdens (a test typo vs. a production behavior change).
+- **Requires stronger branch protection on the adopting repo** — required
+  human approval before merge, not just "require a PR." See README, "Set
+  it up in a target repo."
+
+Mechanically, this lives in `skills/triage-tests/SKILL.md` as Step 7.5
+(attempt and verify the fix) and Step 8.5 (open the PR and cross-link it to
+the issue), and in `templates/bug-fix-pr-template.md` for the PR body
+itself. `.claude-pipeline/03-triage.json` gains a `bug_fix_prs_created`
+array alongside `issues_created`.
 
 ---
 

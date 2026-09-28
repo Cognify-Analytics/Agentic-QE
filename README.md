@@ -94,10 +94,27 @@ or merges into a default branch.
 3. Turn on branch protection on the target repo's default branch before
    setting `live: true` for real — the reusable workflow can open PRs and
    file issues, and branch protection is what keeps a human in the loop for
-   merges.
+   merges. Specifically require **at least one human approval** before
+   merge, not just "require a pull request" — the pipeline's own "never
+   merge" rule is necessary but not sufficient on its own; this is what
+   actually enforces it at the GitHub level.
 4. Trigger a first run with `workflow_dispatch` before relying on the
    `pull_request` trigger, so a whole-repo bootstrap run happens once,
    deliberately, rather than on someone's first PR.
+5. **Optional — `fix_bugs`** (off by default). When on, `/triage-tests` may,
+   for a narrow set of COMPLEX failures backed by a specific documented
+   expectation (see `rules/error-classification.md`), write an actual fix
+   to production source, verify it against the full suite, and open a
+   **second PR** — separate from the routine test-fix PR — that references
+   the issue already filed for that failure (`Relates to #N`, never
+   auto-closing it) and is clearly marked as needing careful human review.
+   The pipeline still never merges anything; this only ever produces
+   something for a human to review and close themselves. It works
+   independently of `live` — with `live: false` it only computes and
+   reports what it would fix, which is a good way to gauge the blast
+   radius before turning it on for real. Make sure step 3's branch
+   protection (required human review) is in place first — a bug-fix PR
+   changes production code, not just tests.
 
 See `PLAN-github-action-v1.md` for the full design, the `run.json` schema
 the workflow and skills share, and the build order this was verified

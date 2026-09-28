@@ -21,6 +21,13 @@ jobs:
       plugin_ref: main
       # node_version: '20'   # only if the repo has a JS/TS stack
       # max_turns: 200       # raise for large or multi-stack repos
+      # fix_bugs: true       # opt-in, off by default: let /triage-tests attempt a
+      #                      # verified fix to production source for a narrow set of
+      #                      # documented bugs and open a second PR linked to the
+      #                      # filed issue. Turn on branch protection with required
+      #                      # human review FIRST — see README "Set it up in a
+      #                      # target repo". Safe to try with live: false first —
+      #                      # it will only report what it would fix.
       setup_script: |
         python -m pip install -U pip
         pip install -r requirements.txt

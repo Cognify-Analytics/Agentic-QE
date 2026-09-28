@@ -41,14 +41,19 @@ A SIMPLE failure is only ever SIMPLE if:
 The failure indicates the production code's actual behavior is the problem,
 or the test cannot be safely touched at all.
 
-| Signal | Why it's COMPLEX |
-|---|---|
-| Assertion fails on business logic | The test correctly exercises a code path and gets a wrong *result*, not a wrong *expression* |
-| Behaviour contradicts what the docs say | `.qa/context.md`, a docstring, or adjacent documentation states one thing; the code does another |
-| Timing or race condition | Passes alone, fails under load or in the full suite — a concurrency bug, not a test bug |
-| Fixing it would mean changing source code | There is no way to make this pass without touching production code |
-| Failure at an integration boundary | The failure crosses into a real external dependency's behavior, not just this unit |
-| The test was written by a human | Always COMPLEX regardless of anything else on this list — see the override rule above |
+| Signal | Why it's COMPLEX | Eligible for opt-in bug-fix mode? |
+|---|---|---|
+| Assertion fails on business logic | The test correctly exercises a code path and gets a wrong *result*, not a wrong *expression* | Yes, but only when the expected result traces to a specific documented expectation (see below) — not merely "this looks wrong" |
+| Behaviour contradicts what the docs say | `.qa/context.md`, a docstring, or adjacent documentation states one thing; the code does another | Yes — this is the clearest case, since the fix target is unambiguous |
+| Timing or race condition | Passes alone, fails under load or in the full suite — a concurrency bug, not a test bug | **No** — a concurrency fix can't be safely attempted or verified blind |
+| Fixing it would mean changing source code | There is no way to make this pass without touching production code | Same as whichever row above actually produced this signal |
+| Failure at an integration boundary | The failure crosses into a real external dependency's behavior, not just this unit | **No** — no live external system to verify against in CI |
+| The test was written by a human | Always COMPLEX regardless of anything else on this list — see the override rule above | **No** — always issue-only in v1, regardless of how strong the evidence looks |
+
+**"Eligible for opt-in bug-fix mode" only matters when `fix_bugs` is on**
+(see `skills/triage-tests/SKILL.md` Step 7.5 and PRD Section 9.1). It is
+off by default; every failure in this table is issue-only, exactly as
+described above, unless a run explicitly turns that mode on.
 
 ### AMBIGUOUS — always treated as COMPLEX. Never guess.
 

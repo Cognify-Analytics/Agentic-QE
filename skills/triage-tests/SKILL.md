@@ -19,11 +19,19 @@ and written out in full, but nothing is actually pushed or filed. Report-only
 is the default because this project is still early in its build — treat
 `--live` as something the user opts into, not the default you assume.
 
+Also pass `--fix-bugs` to turn on the opt-in bug-fix mode (Step 7.5/8.5) —
+off by default, unrelated to `--live` (it works in either mode: report-only
+`--fix-bugs` computes and shows what it *would* fix without touching any
+file; `--live --fix-bugs` actually applies it). See Ground rule 1 below and
+PRD Section 9.1 before turning this on.
+
 When invoked by `/test-pipeline` rather than directly, mode comes from
-`.claude-pipeline/run.json`'s `"live"` field instead of `$ARGUMENTS` (the
-orchestrator writes that file before invoking any stage, and forwards
-`--live` in its own invocation too — check either, they must agree; if
-they don't, trust `run.json` and note the mismatch in `03-triage.json`).
+`.claude-pipeline/run.json`'s `"live"` and `"fix_bugs"` fields instead of
+`$ARGUMENTS` (the orchestrator writes that file before invoking any stage,
+and forwards `--live`/`--fix-bugs` in its own invocation too — check
+either, they must agree; if they don't, trust `run.json` and note the
+mismatch in `03-triage.json`). A missing `"fix_bugs"` field means off —
+never infer it as on.
 
 ## The one rule that matters most
 
@@ -34,7 +42,12 @@ that one. When in doubt, escalate — never guess your way to SIMPLE.
 ## Ground rules (Section 9 of the PRD — non-negotiable, live or report-only)
 
 1. Never change production source code. A fix that would require a source
-   change is automatically COMPLEX.
+   change is automatically COMPLEX. **The one narrow, explicit exception:**
+   when `fix_bugs` is on (see Step 7.5), a bounded, capped, verified fix may
+   be attempted for a small subset of COMPLEX failures — never silently,
+   never by default, and never without the issue from Step 7 already
+   existing first. Everyone who doesn't turn `fix_bugs` on gets exactly the
+   original rule with no exception.
 2. Never edit a test that is not `generated_by_qa: true` for its module in
    `.qa/test-inventory.json`. A human-written test that fails goes straight
    to COMPLEX, no matter what the failure looks like.
@@ -174,6 +187,67 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 combine everything past the cap into one summary issue. Record this in
 `caps_hit`.
 
+### Step 7.5 — Attempt a bug fix (opt-in: `fix_bugs`, off by default)
+
+**Skip this step entirely unless `fix_bugs` is on** (per the Arguments
+section above). This is the one narrow exception to Ground rule 1, and it
+must never activate silently — if you're not certain it's on, treat it as
+off.
+
+Run this once per COMPLEX failure, right after Step 7 has filed (or
+found/commented on) its issue. **Never attempt a fix for a failure that
+doesn't have an issue yet** — the issue is the paper trail this whole
+feature depends on, and Step 7.5 must never run ahead of it.
+
+**Check eligibility first — all of these must hold:**
+1. The failure's classification reason (Step 5) matches one of the two
+   "Yes" rows in `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`'s
+   "Eligible for opt-in bug-fix mode?" column — i.e. there is a specific
+   documented expectation (a `.qa/context.md` line, a docstring, or
+   adjacent docs) that the code contradicts. A vague "this looks wrong"
+   is not enough.
+2. It is **not** a timing/race condition, **not** an integration-boundary
+   failure, **not** from a human-written test, and **not** AMBIGUOUS. All
+   four are always issue-only in v1, `fix_bugs` or not — see the table.
+3. This run hasn't hit the bug-fix cap yet (**3 per run** — separate from
+   Step 7's 10-issue cap).
+
+Any failure that fails even one of these checks gets an issue only,
+exactly as Step 7 already did — do not attempt a fix, and do not record a
+reason why in `bug_fix_prs_created` (that array is only for attempts, not
+every failure considered).
+
+**If eligible, attempt the fix:**
+1. Create a branch `auto-fix/bugfix-issue-<issue_number>` off the same
+   base Step 8 will use, if one doesn't already exist for this issue.
+2. Make the smallest possible change to production source that makes the
+   documented/expected behavior true — scoped to the file(s) the failure's
+   stack trace directly implicates. **Never edit the failing test itself
+   in this step** — that would silently do what Ground rule 1 exists to
+   prevent (rewrite the check instead of the code). If the smallest safe
+   fix would touch more than **2 files**, or any file the stack trace
+   doesn't point to, stop and abandon it — this is too large to attempt
+   blind. Record the abandonment in `escalated`, not `caps_hit` (it isn't
+   a limit, it's a scope judgment).
+3. Verify twice: re-run the specific failing test, then the **whole**
+   stack's suite (not just this test) — a change that fixes one test
+   while breaking three others is not a safe fix. Maximum **2 attempts**.
+   If it still isn't clean after 2, undo every change on the branch,
+   leave the issue as issue-only, and record the abandoned attempt (with
+   why) in `03-triage.json`'s `escalated`.
+4. **Report-only mode:** do not touch any file on disk. Write what the fix
+   *would* change — file(s), a one-line summary of the change, and what
+   verification would need to show — into `03-triage.json`'s
+   `bug_fix_prs_created`, marked `"report_only": true`, `"pr_url": null`.
+5. **`--live` mode:** commit the verified fix to the branch (nothing else
+   — keep it isolated from any SIMPLE-fix or `.qa/` commits) and push. Do
+   not open the PR yet — that's Step 8.5, so both PR and issue-comment
+   links land together.
+
+**Cap: 3 bug-fix attempts per run.** Once hit, every remaining eligible
+failure stays issue-only (already filed in Step 7) — do not attempt a 4th.
+Record the cap in `caps_hit`.
+
 ### Step 8 — Open the PR for any fixes made
 
 **Pick the base branch first.** In CI mode (`.claude-pipeline/run.json`
@@ -201,6 +275,32 @@ record) even with zero SIMPLE fixes:
   all in CI — the pipeline never commits anywhere on its own outside this
   branch, and without this step every future CI run would bootstrap from
   scratch instead of running incrementally.
+
+### Step 8.5 — Open the PR for any bug fixes, and link it to the issue
+
+**Skip entirely unless `fix_bugs` is on and Step 7.5 produced at least one
+verified fix this run.** This PR is always separate from Step 8's — a
+production-code change and a test typo fix carry different review burdens,
+and a reviewer must be able to accept one without the other.
+
+For each fix Step 7.5 verified (branch `auto-fix/bugfix-issue-<issue_number>`
+already has the commit in `--live` mode):
+
+- **Report-only mode:** note in `03-triage.json` and on screen what PR
+  *would* be opened (branch, file(s) changed, the issue it relates to, the
+  verification results), marked `[REPORT-ONLY — not opened]`.
+- **`--live` mode:** push the branch if not already pushed, and open a PR
+  against the same base as Step 8 (GitHub MCP first, `gh pr create` as
+  fallback), using
+  `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` for the body.
+  The template's own warning banner and "Relates to #N" (never
+  "Fixes"/"Closes") are load-bearing — do not paraphrase them away. Record
+  the real PR URL. **Never merge it** — same Rule 4 as every other PR this
+  skill opens.
+- **Either mode:** comment on the issue Step 7 filed, linking back to this
+  PR (the real URL in `--live` mode, the report-only equivalent
+  otherwise) — the issue and the PR must reference each other in both
+  directions, not just PR → issue.
 
 ### Step 9 — Write the result
 
@@ -249,6 +349,7 @@ gitignored, not committed.
       "drafted_body": "... full issue body from the template ..." }
   ],
   "issues_commented": [],
+  "bug_fix_prs_created": [],
   "escalated": [],
   "caps_hit": []
 }
@@ -260,11 +361,32 @@ gitignored, not committed.
 human reading this file must be able to see exactly what would have
 happened.
 
+`bug_fix_prs_created` is always `[]` unless `fix_bugs` was on for this run
+(see Step 7.5/8.5). Each entry:
+
+```json
+{
+  "pr_url": null,
+  "issue_url": null,
+  "test": "test_apply_discount_premium_tier",
+  "file_changed": "src/pricing.py",
+  "summary": "Changed premium tier discount rate from 0.10 to 0.15 to match docs/pricing.md",
+  "tests_rerun": { "target_test": "passed", "full_suite": "passed" },
+  "report_only": true
+}
+```
+
+`report_only`/`pr_url`/`issue_url` follow the same convention as
+`issues_created` above. An eligible failure that was attempted but
+abandoned (scope too large, or still failing after 2 attempts) does **not**
+get an entry here — it goes in `escalated` instead, with the reason.
+
 **Multi-stack variant:** `totals` stays the sum across every stack; add a
 `totals_by_stack` object alongside it, keyed by stack name, each value the
 same `{tests, passed, failed}` shape. Every entry in `classifications`,
-`fixes_applied`, `issues_created`, and `issues_commented` carries a
-`"stack"` field naming which stack it came from, e.g.
+`fixes_applied`, `issues_created`, `issues_commented`, and
+`bug_fix_prs_created` carries a `"stack"` field naming which stack it came
+from, e.g.
 `{ "test": "test_require_user_access...", "file": "backend/tests/test_auth.py", "stack": "backend", "type": "COMPLEX", "reason": "..." }`.
 Nothing else in the schema changes.
 
@@ -297,11 +419,22 @@ then one combined summary issue for the rest, and record the cap in
 **A SIMPLE fix's second attempt also fails.** Undo it, relabel COMPLEX,
 move on — don't try a third time.
 
+**A bug fix's second attempt still fails, or the fix would touch more than
+2 files.** Undo every change on that branch, leave the failure issue-only
+(the issue from Step 7 stays as-is), and record the abandoned attempt in
+`escalated`. Never fall back to a partial or unverified fix.
+
+**More than 3 eligible bug fixes in one run.** Attempt the first 3, leave
+the rest issue-only, and record the cap in `caps_hit` — same pattern as the
+10-issue cap.
+
 ---
 
 ## Rules reference
 
-- `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, and the
-  human-written-test override
+- `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, the
+  human-written-test override, and which COMPLEX signals are eligible for
+  `fix_bugs`
 - `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
+- `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` — bug-fix PR body shape (Step 8.5, `fix_bugs` only)
 - `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)

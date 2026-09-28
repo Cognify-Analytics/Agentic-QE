@@ -13,9 +13,12 @@ in the developer's main session so they can watch each stage happen.
 
 **Arguments, if given:** $ARGUMENTS — pass `--live` to run `/triage-tests`
 in live mode (real branches/PRs/issues) instead of the default report-only.
-Anything else in `$ARGUMENTS` is forwarded to `/generate-tests` as its
-target (a file or folder) — with no target, it scans the whole repo per its
-own Step 5 ranking.
+Pass `--fix-bugs` to also turn on `/triage-tests`' opt-in bug-fix mode
+(off by default — see its Step 7.5/8.5 and PRD Section 9.1); this works
+independently of `--live` per that skill's own rules. Anything else in
+`$ARGUMENTS` is forwarded to `/generate-tests` as its target (a file or
+folder) — with no target, it scans the whole repo per its own Step 5
+ranking.
 
 This skill also runs unattended inside CI, driven by a GitHub Actions
 reusable workflow that writes `.claude-pipeline/run.json` itself before
@@ -67,7 +70,8 @@ single-session behavior, just non-interactive.
   "branch": "feature/refunds",
   "timestamp": "2026-08-21T14:02:00Z",
   "mode": "pipeline",
-  "live": false
+  "live": false,
+  "fix_bugs": false
 }
 ```
 
@@ -82,6 +86,7 @@ before this skill is invoked — see this repo's
   "timestamp": "2026-09-09T14:02:00Z",
   "mode": "ci",
   "live": true,
+  "fix_bugs": false,
   "ci": {
     "pr_number": 42,
     "pr_base_branch": "feature/refunds",
@@ -184,9 +189,10 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 
 ## Needs a human
 {one line per issue in issues_created/issues_commented, report-only or real URL}
+{one line per entry in bug_fix_prs_created, flagged distinctly — e.g. "Bug-fix PR (needs careful review): ..." — since this is a production-code change, not a routine test fix}
 
 ## Changes made
-{pr_planned or pr_url — always "no source code changed"}
+{pr_planned or pr_url — "no source code changed" unless bug_fix_prs_created is non-empty, in which case say explicitly that fix_bugs was on and list each bug-fix PR with the issue it relates to}
 
 ## Please commit
 {the exact file list from step 4 above}
@@ -208,9 +214,14 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
   "triage_totals": { "tests": 84, "passed": 79, "failed": 5 },
   "simple_fixes": 1,
   "complex_issues": 2,
+  "bug_fix_prs": 0,
   "caps_hit": []
 }
 ```
+
+`bug_fix_prs` is the count of `bug_fix_prs_created` entries with a non-null
+`pr_url` (i.e. actually opened, not report-only) — always `0` unless
+`fix_bugs` was on for this run.
 
 **Multi-stack repos** (`01-tests.json`/`03-triage.json` have a `stacks`
 shape — see `/generate-tests`): report coverage and triage totals **per

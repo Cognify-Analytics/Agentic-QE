@@ -454,3 +454,26 @@ that be incremental.
 **Flaky tests land as COMPLEX.** They won't match any SIMPLE pattern, so they'll
 be filed as suspected bugs. That's the correct conservative behavior, but it's
 noisy on a flaky suite — worth knowing before you point this at one.
+
+---
+
+## Addendum — optional bug-fix mode (`fix_bugs`)
+
+Added after the initial GitHub Action shipped, at explicit request: a new
+`fix_bugs` boolean input on the reusable workflow (default `false`,
+independent of `live`), threaded into `run.json` the same way `live` is.
+When on, `/triage-tests` may write a verified fix to production source for
+a narrow, capped set of COMPLEX bugs (see PRD Section 9.1) and open a
+**second** PR — separate from the SIMPLE-fix PR this plan already
+describes — that references the issue already filed for that failure
+(`Relates to #N`, never auto-closing it).
+
+No changes to the job's `permissions:` block were needed — `contents:
+write`, `pull-requests: write`, and `issues: write` already cover the
+second branch/PR and the issue cross-comment.
+
+This raises the bar on the Phase 3 guidance above: "require a PR and at
+least one human approval" changes from *strongly recommended* to a
+precondition worth stating outright before anyone flips `fix_bugs: true`
+in the caller workflow — see the reusable workflow's `fix_bugs` input
+description and README, "Set it up in a target repo," step 5.
