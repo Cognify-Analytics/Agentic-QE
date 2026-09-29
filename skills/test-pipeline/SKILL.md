@@ -215,6 +215,25 @@ happened if it didn't produce output.)
 
 ---
 
+## If you stop early at a stage gate
+
+A halted run is still a run, and it is the one most worth having a record
+of. Before stopping at any gate above, write both:
+
+1. `.claude-pipeline/stages.json` — the stages that ran, and
+   `"not_reached"` for the rest.
+2. `.qa/runs/<yyyy-mm-dd>-<sha>.json` — the same run record as a normal
+   finish (schema below), with `"status": "stopped"`, a `"stopped_at"`
+   naming the gate that failed (e.g. `"stage-1-check"`), and a one-line
+   `"reason"`. Fill in whatever is genuinely known and leave the rest out
+   rather than guessing at numbers no stage produced.
+
+Then report what failed on screen and stop. In CI the workflow commits
+that record the same way it would a successful run, so a halted run is
+visible in the repo rather than only in a job log that ages out.
+
+---
+
 ## Finish
 
 1. **Write `.claude-pipeline/stages.json` first** (shape below) — before the
@@ -229,11 +248,17 @@ happened if it didn't produce output.)
 4. Copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
    full scratch detail, just enough for a team to see pipeline history at a
    glance (see schema below). Create `.qa/runs/` if it doesn't exist.
-5. Remind the developer on screen to commit `.qa/context.md`,
-   `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and every test file
-   `01-tests.json` listed under `files_created`/`files_modified`. This
-   pipeline never commits on its own (Section 9, Rule 5/6 — commits and
-   merges are for people).
+5. **Local runs only** — remind the developer on screen to commit
+   `.qa/context.md`, `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
+   every test file `01-tests.json` listed under
+   `files_created`/`files_modified`. Locally this pipeline never commits on
+   its own (Section 9, Rule 5/6 — commits and merges are for people).
+
+   **In CI mode, do not print that reminder** — there is no developer at a
+   terminal to act on it, and the workflow's "Record the run in `.qa/`"
+   step commits `.qa/` itself once every stage has finished. Say where it
+   landed instead: on the PR's own head branch. Test files still travel in
+   `/triage-tests`' auto-fix PR, as before.
 
 **Expected — `.claude-pipeline/stages.json` (scratch, read by CI telemetry):**
 
@@ -256,6 +281,7 @@ for those two cases.
 ```markdown
 # QA Pipeline Run — {project name}
 Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
+{strategy, and any stage that was skipped, with its reason}
 
 ## Tests
 {files created/modified from 01-tests.json, coverage before -> after}
@@ -275,7 +301,8 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 {pr_planned or pr_url — "no source code changed" unless bug_fix_prs_created is non-empty, in which case say explicitly that fix_bugs was on and list each bug-fix PR with the issue it relates to}
 
 ## Please commit
-{the exact file list from step 4 above}
+{local runs: the exact file list from step 5 above}
+{CI runs: replace this section with "## Recorded" — say that `.qa/` was committed to the PR's head branch by the workflow, and name any test files travelling in the auto-fix PR}
 ```
 
 **Expected — `.qa/runs/<yyyy-mm-dd>-<sha>.json`:**

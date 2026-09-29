@@ -533,5 +533,55 @@ data point, not a run.
 model has finished, so it can't be written into the committed
 `.qa/runs/<date>-<sha>.json`. That record carries the strategy and stage
 outcomes instead; join it to a `telemetry.json` on `sha` for the full
-picture. Closing that gap would mean a second commit-and-push after the
-action completes, racing the auto-fix PR — not worth the fragility.
+picture.
+
+---
+
+## Addendum — `.qa/` never actually reached the repo in CI
+
+"How `.qa/` survives" above describes `/triage-tests` committing `.qa/`
+onto its auto-fix branch. In practice CI runs recorded nothing at all —
+not even a run log — for three compounding reasons:
+
+1. **An ordering bug.** `/triage-tests` runs as Stage 3, but
+   `.qa/runs/<date>-<sha>.json` is written by `/test-pipeline`'s Finish
+   section, which runs *after* it. The run record did not exist at the
+   moment triage was told to commit it, so it could never be included.
+2. **Nothing to commit on the common path.** On a `triage-only` run,
+   `context.md` and `test-inventory.json` are both unchanged, so triage's
+   "does `.qa/` have changes?" condition was false and no branch was ever
+   created. The Stage 2 skip added for cost made this more likely, not
+   less.
+3. **Report-only.** Triage only pushes in live mode, and the caller
+   template ships `live: false`.
+
+Underneath all three, the fallback step this plan called for — *"add a
+fallback step that creates the branch, commits `.qa/` ... and opens the
+PR"* — was never built.
+
+**Resolution.** `.qa/` persistence moved out of the model and into a
+deterministic workflow step, "Record the run in `.qa/`", which runs after
+every stage has finished. That dissolves the ordering bug by construction.
+`/triage-tests` Step 8 now commits test fixes only and is explicitly told
+not to touch `.qa/`, so there is exactly one owner and no duplicate commits
+to conflict on merge.
+
+Decisions taken with it:
+
+- **Target.** On a `pull_request`, `.qa/` is committed straight onto the
+  PR's own head branch — no extra PR per run, and it reaches the default
+  branch through the developer's normal merge. On a `workflow_dispatch`
+  against the default branch it goes to `agentic-qe/qa-baseline-<sha>` with
+  a PR, because Rule 5 forbids pushing to a default branch and that is
+  exactly the recommended first-run bootstrap path.
+- **Modes.** It runs in report-only too. Report-only is about not filing
+  issues and not changing the developer's code — not about withholding the
+  pipeline's own bookkeeping.
+- **Guards.** Gated on the source-safety assertion having passed; only
+  `.qa/` is ever staged; a mid-run push by someone else is handled by
+  rebase-and-retry rather than a force push; and a gitignored `.qa/` is
+  reported as such instead of as "no changes."
+
+`/test-pipeline` also now writes a run record when it **stops early** at a
+stage gate. A halted run is the one most worth having a record of, and
+previously produced none.

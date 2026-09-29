@@ -120,6 +120,43 @@ See `PLAN-github-action-v1.md` for the full design, the `run.json` schema
 the workflow and skills share, and the build order this was verified
 against.
 
+## Where a run gets recorded
+
+A run writes the same `.qa/` output whether it runs locally or in CI — what
+differs is only how it persists.
+
+**Locally**, the files land in your working tree and the pipeline reminds
+you to commit them. It never commits on your behalf.
+
+**In CI**, the runner is ephemeral, so the workflow commits `.qa/` itself
+in a dedicated "Record the run in `.qa/`" step:
+
+| Trigger | Where `.qa/` lands |
+|---|---|
+| `pull_request` | Committed straight onto the PR's own head branch, so the record travels with the PR and reaches your default branch when you merge it |
+| `workflow_dispatch` on the default branch | Pushed to `agentic-qe/qa-baseline-<sha>` with a PR opened — the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
+
+This happens in **report-only mode too**. Report-only means no issues are
+filed and none of your code is touched; it does not mean the pipeline
+withholds its own log. The step only touches `.qa/` — never source, never
+tests — and runs only after the "no production source was changed"
+assertion has passed. Test fixes are unaffected: they still travel in
+`/triage-tests`' auto-fix PR.
+
+Three things worth knowing:
+
+- A push made with `GITHUB_TOKEN` does not re-trigger workflows, so this
+  cannot loop.
+- If someone pushes to the branch while a run is in progress, the step
+  rebases onto their commit and retries rather than force-pushing.
+- If `.qa/` is listed in the repo's `.gitignore`, nothing can be recorded.
+  The step says so explicitly rather than reporting "no changes" — that
+  entry needs removing, since `.qa/` is meant to be committed.
+
+Getting `.qa/` into the repo is also what keeps runs cheap: without a
+committed baseline, every run bootstraps the whole repo from scratch
+instead of running incrementally.
+
 ## Cost and telemetry
 
 A run's cost is driven by **token volume and turn count, not model price**.

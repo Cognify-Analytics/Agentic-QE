@@ -294,6 +294,7 @@ jobs:
           exit 0
 
       - name: Assert no production source was changed
+        id: assert
         if: always()
         run: |
           set -euo pipefail
@@ -309,6 +310,88 @@ jobs:
             echo "$BAD"
             exit 1
           fi
+
+      # Persist the pipeline's own bookkeeping to the repo.
+      #
+      # This is deliberately a workflow step rather than a model instruction. It runs
+      # after every stage has finished, so .qa/runs/<date>-<sha>.json — which the
+      # orchestrator only writes at the very end — is actually on disk by the time
+      # anything commits it. /triage-tests used to be asked to commit that file from
+      # Stage 3, before it existed, which is why CI runs recorded nothing.
+      #
+      # Runs in report-only mode too: report-only is about not filing issues and not
+      # touching the developer's code, not about withholding the pipeline's own log.
+      - name: Record the run in .qa/
+        if: always() && steps.assert.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+
+          git add -- .qa/ 2>/dev/null || true
+          if git diff --cached --quiet 2>/dev/null; then
+            # Tell apart "genuinely nothing new" from "changes exist but git refuses to
+            # stage them" — almost always .qa/ being gitignored. Reporting the first
+            # when it is really the second is what makes this silent and hard to debug.
+            IGNORED=$(git status --porcelain --ignored=matching -- .qa/ 2>/dev/null | grep '^!!' || true)
+            if [ -n "${IGNORED}" ]; then
+              echo "::warning::.qa/ has content but is git-ignored in this repo, so the pipeline's output cannot be recorded. Remove the .qa entry from .gitignore."
+            else
+              echo "No .qa/ changes to record."
+            fi
+            exit 0
+          fi
+
+          SHA=$(git rev-parse --short HEAD)
+          git commit -q \
+            -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
+            -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
+
+          # PRD Section 9 Rule 5: never push to a default branch. The recommended
+          # first-run bootstrap is a workflow_dispatch, which runs against exactly
+          # that — so this case gets its own branch and a PR instead of being dropped.
+          if [ -z "${HEAD_BRANCH}" ] || [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
+            QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            if git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
+              cat > qa-baseline-pr.md <<EOF
+          Adds the Agentic QE baseline and run record for \`${SHA}\`. Only \`.qa/\` is
+          touched — no production source, no tests.
+
+          Merging this is what lets the next run go incremental instead of
+          bootstrapping the whole repo from scratch.
+
+          [Run log](${RUN_URL})
+          EOF
+              gh pr create --base "${DEFAULT_BRANCH}" --head "${QA_BRANCH}" \
+                --title "Agentic QE: record run ${SHA}" \
+                --body-file qa-baseline-pr.md 2>/dev/null \
+                || echo "A PR for ${QA_BRANCH} already exists."
+              rm -f qa-baseline-pr.md
+              echo "Recorded on ${QA_BRANCH} (refused to push to default branch ${DEFAULT_BRANCH})."
+            else
+              echo "::warning::Could not push ${QA_BRANCH} — the record is in the run artifact only."
+            fi
+            exit 0
+          fi
+
+          # Normal PR run: commit straight onto the PR's own head branch, so the record
+          # travels with the developer's PR and reaches the default branch when they
+          # merge it. A GITHUB_TOKEN push does not re-trigger workflows, so no loop.
+          for attempt in 1 2 3; do
+            if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
+              echo "Recorded .qa/ on ${HEAD_BRANCH}."
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
+            git fetch --no-tags origin "${HEAD_BRANCH}" || true
+            git rebase "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
+            sleep 3
+          done
+          echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+          exit 0
 
       - name: Post summary comment
         if: always() && github.event_name == 'pull_request'

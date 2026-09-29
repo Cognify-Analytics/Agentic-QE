@@ -285,21 +285,26 @@ same as below, and record why in `03-triage.json`). Interactively (no CI
 `run.json`, or `mode` isn't `"ci"`), base it on the repo's current branch as
 before.
 
-If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch, or if
-this is a CI run and `.qa/` has changes to commit (new/updated
-`test-inventory.json`, `context.md`, or a `.qa/runs/<date>-<sha>.json`
-record) even with zero SIMPLE fixes:
+**This step commits test fixes only. Never commit `.qa/` here.** That
+folder is recorded separately — by the CI workflow's own "Record the run in
+`.qa/`" step, which runs after every stage has finished, and by the
+developer's own commit when running locally. The reason is a timing one:
+`.qa/runs/<date>-<sha>.json` is written by `/test-pipeline`'s Finish
+section, which runs *after* this stage, so it does not exist yet at this
+point in the run. Committing `.qa/` from here would silently miss the run
+record every time, and would now also duplicate what the workflow commits.
+
+If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
 - **Report-only mode:** note in `03-triage.json` and on screen what PR
   *would* be opened (branch, files changed, one-line summary per fix),
   marked `[REPORT-ONLY — not opened]`. Do not push the branch.
 - **`--live` mode:** create the branch if it doesn't already exist, commit
-  the SIMPLE fixes (if any) **and** `.qa/context.md`, `.qa/test-inventory.json`
-  and `.qa/runs/<date>-<sha>.json` onto it, push, and open a PR against the
-  base branch chosen above (GitHub MCP first, `gh pr create` as fallback).
-  Never merge it. Committing `.qa/` here is what lets it reach the repo at
-  all in CI — the pipeline never commits anywhere on its own outside this
-  branch, and without this step every future CI run would bootstrap from
-  scratch instead of running incrementally.
+  the SIMPLE fixes onto it, push, and open a PR against the base branch
+  chosen above (GitHub MCP first, `gh pr create` as fallback). Never merge
+  it.
+
+If Step 6 produced no fixes, there is nothing to open a PR for — say so and
+move on. An empty run is a normal outcome, not a failure.
 
 ### Step 8.5 — Open the PR for any bug fixes, and link it to the issue
 
