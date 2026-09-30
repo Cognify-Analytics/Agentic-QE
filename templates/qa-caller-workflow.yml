@@ -1,10 +1,19 @@
 # Copy this file into the target repo as .github/workflows/qa.yml.
 # It calls the reusable workflow hosted in Agentic-QE — see
-# .github/workflows/qa-pipeline.yml in this repo for what it actually does.
+# .github/workflows/qa-pipeline.yml there for what it actually does.
 #
-# Two refs must point at the same Agentic-QE version:
-#   - the `uses:` ref below  — which version of the reusable workflow runs
-#   - `plugin_ref`           — which version of the skills/rules it loads
+# ─── EDIT THESE BEFORE THE FIRST RUN ────────────────────────────────────────
+#  1. `setup_script` — MUST match THIS repo's layout. The value below is only an
+#     example for a single-stack Python repo at the root. It is the single most
+#     common reason a first run fails.
+#     If you are RE-COPYING this file over an existing qa.yml, keep your current
+#     setup_script — do not let this example overwrite a working one.
+#  2. `uses:` ref and `plugin_ref` — these are two SEPARATE checkouts and must
+#     name the same version. `uses:` picks the workflow; `plugin_ref` picks the
+#     skills and rules it drives. Mismatching them runs one version's workflow
+#     against another version's skills.
+#  3. `live` — start at false. See README "Set it up in a target repo".
+# ────────────────────────────────────────────────────────────────────────────
 name: QA Pipeline
 on:
   pull_request:
@@ -17,24 +26,42 @@ jobs:
     uses: Cognify-Analytics/Agentic-QE/.github/workflows/qa-pipeline.yml@main
     secrets: inherit
     with:
-      live: false
-      plugin_ref: main
-      # node_version: '20'   # only if the repo has a JS/TS stack
-      # max_turns: 200       # ceiling that stops a runaway run; raise for large or
-      #                      # multi-stack repos. Lowering it does NOT cut normal cost.
-      # model: claude-sonnet-5
-      #                      # pins the whole pipeline to one model. Check the run's
-      #                      # telemetry (job summary / PR comment footer) before and
-      #                      # after — cost here is usually bound by token volume,
-      #                      # not model price. See README "Cost and telemetry".
-      # fix_bugs: true       # opt-in, off by default: let /triage-tests attempt a
-      #                      # verified fix to production source for a narrow set of
-      #                      # documented bugs and open a second PR linked to the
-      #                      # filed issue. Turn on branch protection with required
-      #                      # human review FIRST — see README "Set it up in a
-      #                      # target repo". Safe to try with live: false first —
-      #                      # it will only report what it would fix.
+      # ---- REQUIRED: replace with what installs THIS repo's deps and test runner ----
+      # Single-stack Python at the repo root (the example):
       setup_script: |
         python -m pip install -U pip
         pip install -r requirements.txt
         pip install pytest pytest-cov
+      #
+      # Multi-stack monorepo (backend/ + frontend/) would instead be:
+      #   setup_script: |
+      #     python -m pip install -U pip
+      #     pip install -r backend/requirements.txt
+      #     pip install pytest pytest-cov
+      #     npm --prefix frontend ci
+      # ------------------------------------------------------------------------------
+
+      # Must name the same Agentic-QE version as the `uses:` ref above.
+      plugin_ref: main
+
+      # Report-only until you have watched a few runs. See README.
+      live: false
+
+      # Only if this repo has a JS/TS stack.
+      # node_version: '20'
+
+      # Ceiling that stops a runaway run; raise for large or multi-stack repos.
+      # Lowering it does NOT make a normal run cheaper.
+      # max_turns: 200
+
+      # Pins the whole pipeline to one model. Check the run's telemetry (job
+      # summary / PR comment footer) before and after — cost here is usually
+      # bound by token volume, not model price. See README "Cost and telemetry".
+      # model: claude-sonnet-5
+
+      # Opt-in, off by default: lets /triage-tests attempt a verified fix to
+      # production source for a narrow set of documented bugs and open a second
+      # PR linked to the filed issue. Turn on branch protection with required
+      # human review FIRST — see README. Safe to try with live: false, which
+      # only reports what it would fix.
+      # fix_bugs: true

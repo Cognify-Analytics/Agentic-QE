@@ -91,6 +91,23 @@ jobs:
           path: .agentic-qe
           token: ${{ secrets.AGENTIC_QE_READ_TOKEN || github.token }}
 
+      # The reusable workflow and the skills it drives are two separate checkouts at
+      # two separately-specified refs. Pinning them apart is silently destructive —
+      # a new workflow driving old skills produces behaviour neither version was
+      # tested with — so name it loudly rather than letting it look like a normal run.
+      - name: Check the plugin matches this workflow
+        env:
+          WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -uo pipefail
+          PLUGIN_SHA=$(git -C .agentic-qe rev-parse HEAD 2>/dev/null || echo unknown)
+          echo "plugin   (${{ inputs.plugin_ref }}): ${PLUGIN_SHA}"
+          echo "workflow                           : ${WORKFLOW_SHA:-unknown}"
+          if [ -n "${WORKFLOW_SHA:-}" ] && [ "${PLUGIN_SHA}" != "unknown" ] \
+             && [ "${PLUGIN_SHA}" != "${WORKFLOW_SHA}" ]; then
+            echo "::warning::plugin_ref '${{ inputs.plugin_ref }}' (${PLUGIN_SHA}) is not the same commit as the reusable workflow (${WORKFLOW_SHA}). The workflow and the skills it drives are from different versions — set plugin_ref to the same ref you call the workflow at."
+          fi
+
       - name: Keep scratch out of the diff
         run: printf '%s\n' '.claude-pipeline/' '.agentic-qe/' >> .git/info/exclude
 
