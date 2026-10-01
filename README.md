@@ -32,9 +32,25 @@ for the CI design.
 ## Install (one step)
 
 This repo is packaged as a Claude Code plugin — and doubles as its own
-marketplace — so anyone with access to it can install the skills into
-their own Claude Code with two commands, run from anywhere (no need to
-clone or `cd` into this repo first):
+marketplace — so it installs with two commands, run from anywhere (no need
+to clone or `cd` into this repo first).
+
+**Before you start: the repo is private.** Only members of the
+Cognify-Analytics GitHub org can install it, and Claude Code clones it
+with your existing git credentials. It never prompts for a password, so
+set up access first, using either of these:
+
+- **HTTPS:** `gh auth login`, then `gh auth setup-git`, so git uses your
+  `gh` login.
+- **SSH:** a GitHub SSH key loaded in `ssh-agent`. Claude Code tries SSH
+  first and falls back to HTTPS. If you have no GitHub SSH key, set
+  `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` to skip the SSH attempt.
+
+To confirm it works, run
+`git ls-remote https://github.com/Cognify-Analytics/Agentic-QE.git`. If
+that lists refs without asking for a password, you're set.
+
+Then install:
 
 ```
 /plugin marketplace add Cognify-Analytics/Agentic-QE
@@ -46,11 +62,17 @@ then `claude plugin install agentic-qe@agentic-qe-marketplace`.)
 
 That's it — the four skills are then available in **any** project, and
 Claude will also invoke them automatically when a request matches what
-they do.
+they do. Background updates use the same stored credentials, so nothing
+else is needed to stay current.
 
-To pin to a specific release instead of the latest commit on `main`, add
-`@<tag>` to the marketplace command, e.g.
-`/plugin marketplace add Cognify-Analytics/Agentic-QE@v0.1.0`.
+If the add fails with `Failed to clone marketplace repository` (or
+`SSH/HTTPS authentication failed`), it's almost always access: you're not
+in the org yet, or git has no stored credentials for GitHub. A private
+repo you can't see fails exactly like a misspelled one.
+
+To pin a branch or tag instead of the latest commit on `main`, add
+`#<ref>` to the marketplace command, e.g.
+`/plugin marketplace add Cognify-Analytics/Agentic-QE#<tag>`.
 
 ## Run it locally
 
