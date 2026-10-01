@@ -37,9 +37,29 @@ single-session behavior, just non-interactive.
    (Section 9, Rule 3/5) — there is no reasonable way to run safely without
    it. Suggest `git init` and an initial commit, then stop. Do not create
    any other file yet.
-2. Create `.qa/` if it doesn't exist.
-3. Create `.claude-pipeline/` if it doesn't exist.
-4. **Check for a CI-written `run.json` first.** If `.claude-pipeline/run.json`
+2. **Local `--live` runs only — check GitHub access before Stage 1.** In
+   CI the workflow supplies the token, the repo, and a PR base branch that
+   is known to exist on the remote. Locally none of that is given, so
+   establish it now rather than let `/triage-tests` discover a problem
+   after two whole stages have already run. Run
+   `python ${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py` (it checks `gh`
+   is installed and logged in, resolves the repo from the branch's remote,
+   checks you have write access, and picks the PR base — see the script's
+   docstring for the rule).
+   - **`"ok": true`** — copy everything except `ok`/`problems` into
+     `run.json` as a `"local"` object (schema below) when you write it in
+     step 5.
+   - **`"ok": false`** — **stop before writing anything else.** Show the
+     user every entry in `problems` and say they can fix those and re-run,
+     or re-run without `--live` for a report-only run. Never quietly drop
+     to report-only: they asked for live and should know they aren't
+     getting it.
+
+   Report-only local runs and CI runs skip this step — neither one needs
+   to reach GitHub from this machine.
+3. Create `.qa/` if it doesn't exist.
+4. Create `.claude-pipeline/` if it doesn't exist.
+5. **Check for a CI-written `run.json` first.** If `.claude-pipeline/run.json`
    already exists and its `"mode"` is `"ci"`, the GitHub Actions workflow
    wrote it before invoking this skill (see the CI schema below) — **read it
    and do not overwrite it.** Everything downstream (stage checks, the
@@ -48,7 +68,7 @@ single-session behavior, just non-interactive.
    `.claude-pipeline/run.json` yourself now (schema below) — **before
    invoking any stage**, since that's how `/generate-tests` knows to skip
    its approval prompt and how `/triage-tests` knows whether to run live.
-5. **Skip this step entirely in CI mode** (i.e. when `run.json`'s `"mode"`
+6. **Skip this step entirely in CI mode** (i.e. when `run.json`'s `"mode"`
    is `"ci"`) — the workflow already keeps `.claude-pipeline/` out of the
    diff via `.git/info/exclude`, and appending to a tracked `.gitignore` on
    every CI run would dirty the working tree for no reason. For a local
@@ -56,7 +76,7 @@ single-session behavior, just non-interactive.
    missing; create `.gitignore` if the repo has none). A one-liner is
    enough:
    `grep -qxF '.claude-pipeline/' .gitignore 2>/dev/null || echo '.claude-pipeline/' >> .gitignore`
-6. Ensure `.gitignore` does **not** ignore `.qa/` — that folder is meant to
+7. Ensure `.gitignore` does **not** ignore `.qa/` — that folder is meant to
    be committed (Section 6.1). If you find a `.qa` or `.qa/` line in
    `.gitignore`, remove it and tell the user why: their test inventory and
    context doc would otherwise never make it into version control and the
@@ -72,6 +92,31 @@ single-session behavior, just non-interactive.
   "mode": "pipeline",
   "live": false,
   "fix_bugs": false
+}
+```
+
+**Local `--live` run** — the same, plus the `"local"` object from step 2's
+preflight. It is the local stand-in for the CI schema's `ci` block:
+`/triage-tests` reads `repo` where CI would read `GH_REPO`,
+`pr_base_branch` where CI would read `ci.pr_base_branch`, and
+`start_branch` to put the developer back where they started once it has
+finished pushing fix branches.
+
+```json
+{
+  "sha": "a1b2c3d",
+  "branch": "feature/refunds",
+  "timestamp": "2026-08-21T14:02:00Z",
+  "mode": "pipeline",
+  "live": true,
+  "fix_bugs": false,
+  "local": {
+    "repo": "org/repo",
+    "remote": "origin",
+    "default_branch": "main",
+    "start_branch": "feature/refunds",
+    "pr_base_branch": "feature/refunds"
+  }
 }
 ```
 
@@ -253,6 +298,11 @@ visible in the repo rather than only in a job log that ages out.
    every test file `01-tests.json` listed under
    `files_created`/`files_modified`. Locally this pipeline never commits on
    its own (Section 9, Rule 5/6 — commits and merges are for people).
+   **Exception, local `--live` only:** leave out any test file listed in
+   `03-triage.json`'s `pr_planned.files_changed` when `pr_url` is set —
+   that file was committed to the auto-fix branch and travels in that PR,
+   exactly as in CI. Name the PR instead so the developer knows where it
+   went.
 
    **In CI mode, do not print that reminder** — there is no developer at a
    terminal to act on it, and the workflow's "Record the run in `.qa/`"

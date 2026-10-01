@@ -63,6 +63,28 @@ that one. When in doubt, escalate — never guess your way to SIMPLE.
 
 ## Instructions
 
+### Step 0 — Local `--live` runs: confirm GitHub access
+
+**Skip this step in report-only mode and in CI mode** (`run.json`'s
+`"mode"` is `"ci"` — the workflow already supplies `GH_TOKEN`, `GH_REPO`
+and `ci.pr_base_branch`).
+
+For a local `--live` run, you need the same three things CI gets for free:
+which repo to file against, which remote to push to, and which branch a PR
+should target. If `.claude-pipeline/run.json` has a `"local"` object,
+`/test-pipeline` already established them — use it. Otherwise (you were
+invoked directly), run `python ${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py`
+yourself and use its output the same way. If it reports `"ok": false`,
+stop before running any test, show the user every entry in `problems`, and
+tell them they can fix those or re-run without `--live`. Do not silently
+fall back to report-only.
+
+Everywhere below that says "the local repo/remote/base/start branch", it
+means these values: `repo`, `remote`, `pr_base_branch`, `start_branch`.
+Pass `--repo <repo>` on every `gh issue`/`gh pr` command in a local live
+run, so `gh` never has to guess between several remotes, and push only to
+`<remote>`.
+
 ### Step 1 — Read the context
 
 Read `.qa/context.md` if it exists. You cannot judge whether a failure is a
@@ -206,7 +228,8 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
    screen, clearly marked `[REPORT-ONLY — not filed]`.
 6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
-   `gh issue comment`) and record the real URL.
+   `gh issue comment` — with `--repo` set to the local repo when running
+   locally, per Step 0) and record the real URL.
 
 **Cap: 10 issues per run.** Beyond that, stop opening individual issues and
 combine everything past the cap into one summary issue. Record this in
@@ -265,7 +288,8 @@ every failure considered).
    verification would need to show — into `03-triage.json`'s
    `bug_fix_prs_created`, marked `"report_only": true`, `"pr_url": null`.
 5. **`--live` mode:** commit the verified fix to the branch (nothing else
-   — keep it isolated from any SIMPLE-fix or `.qa/` commits) and push. Do
+   — keep it isolated from any SIMPLE-fix or `.qa/` commits) and push
+   (to the local remote from Step 0, when running locally). Do
    not open the PR yet — that's Step 8.5, so both PR and issue-comment
    links land together.
 
@@ -281,9 +305,11 @@ exists with `"mode"` `"ci"`), the PR must be based on `run.json`'s
 flows back into their PR rather than being stranded against the repo's
 default branch. **If `ci.pr_base_branch` is missing, do not guess a base —
 fall back to report-only for this step** (note what would have been opened,
-same as below, and record why in `03-triage.json`). Interactively (no CI
-`run.json`, or `mode` isn't `"ci"`), base it on the repo's current branch as
-before.
+same as below, and record why in `03-triage.json`). Locally, base it on the
+local base branch from Step 0 — never on whatever branch happens to be
+checked out by now, since Step 6 has moved you onto the auto-fix branch.
+In report-only mode, where Step 0 was skipped, note the current branch as
+the would-be base.
 
 **This step commits test fixes only. Never commit `.qa/` here.** That
 folder is recorded separately — by the CI workflow's own "Record the run in
@@ -299,7 +325,8 @@ If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
   *would* be opened (branch, files changed, one-line summary per fix),
   marked `[REPORT-ONLY — not opened]`. Do not push the branch.
 - **`--live` mode:** create the branch if it doesn't already exist, commit
-  the SIMPLE fixes onto it, push, and open a PR against the base branch
+  the SIMPLE fixes onto it, push (to the local remote from Step 0, when
+  running locally), and open a PR against the base branch
   chosen above (GitHub MCP first, `gh pr create` as fallback). Never merge
   it.
 
@@ -331,6 +358,25 @@ already has the commit in `--live` mode):
   PR (the real URL in `--live` mode, the report-only equivalent
   otherwise) — the issue and the PR must reference each other in both
   directions, not just PR → issue.
+
+### Step 8.9 — Local `--live` runs: put the developer back
+
+**Skip in CI** (the runner is thrown away) **and in report-only mode**
+(nothing was committed, so there is nothing to step away from).
+
+Steps 6 and 7.5 checked out `auto-fix/...` branches. On a CI runner that
+doesn't matter; on a developer's machine it would leave them on a bot
+branch. Once every push and PR above is done, run
+`git checkout <start_branch>` (from Step 0). Uncommitted work — `.qa/`, and
+any generated tests that were not committed to an auto-fix branch — comes
+back with you, as it went. A test file that *was* committed to the
+auto-fix branch stays there and leaves this working tree; that is
+intended, since it reaches `start_branch` when the developer merges the
+PR. Say so on screen and name the PR, so a missing file is never a surprise.
+
+If the checkout fails (a conflict with uncommitted changes), do not force
+it and do not stash anything. Tell the user which branch they are on, why
+the switch failed, and the exact command to get back.
 
 ### Step 9 — Write the result
 
@@ -440,6 +486,13 @@ Interactively, stop and ask the user.
 If `gh` isn't authenticated either, report-only mode still works fully
 (nothing needs to actually reach GitHub); in `--live` mode, stop and tell the
 user GitHub access isn't available rather than silently staying in
+report-only. Locally, Step 0's preflight should already have caught this
+before any test ran.
+
+**Local preflight refuses because the branch isn't pushed.** This is on
+purpose. CI always targets a branch that exists on GitHub; locally, an
+auto-fix branch cut from unpushed commits would carry them into the PR.
+The developer pushes first (`git push -u <remote> <branch>`), or runs
 report-only.
 
 **More than 10 COMPLEX/AMBIGUOUS failures.** File the first 10 individually,
@@ -468,3 +521,4 @@ the rest issue-only, and record the cap in `caps_hit` — same pattern as the
 - `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
 - `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` — bug-fix PR body shape (Step 8.5, `fix_bugs` only)
 - `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)
+- `${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py` — local `--live` only: GitHub access, repo, remote and PR base (Step 0)
