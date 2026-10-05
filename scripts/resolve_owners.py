@@ -1,30 +1,54 @@
 #!/usr/bin/env python3
-"""Resolve a file path to an owner via CODEOWNERS.
+"""Resolve file paths to owners via CODEOWNERS, and optionally to the
+GitHub users who can actually be assigned.
 
 Looks for CODEOWNERS in the conventional locations (repo root, .github/,
-docs/) and matches the given path against its patterns, last match wins
+docs/) and matches each given path against its patterns, last match wins
 (matching GitHub's own CODEOWNERS precedence rule).
 
 Usage:
-    python scripts/resolve_owners.py <path/to/file> [--repo-root .]
+    python scripts/resolve_owners.py <path> [<path> ...] [--repo-root .]
+                                     [--github-repo OWNER/REPO]
 
-Prints JSON to stdout:
+Without --github-repo nothing touches the network -- this is what a
+report-only run uses. Prints JSON to stdout:
 
-    {"path": "src/pricing.py", "owners": ["@payments-team"], "source": "CODEOWNERS"}
+    {"files": [{"path": "src/pricing.py", "owners": ["@payments-team"],
+                "source": "CODEOWNERS:src/pricing.py"}],
+     "owners": ["@payments-team"]}
 
-If no CODEOWNERS file exists, or nothing matches, "owners" is an empty list
-and "source" explains why -- this is not an error, it's a normal outcome
-that /triage-tests must handle by filing the issue without an assignee
+"owners" is the union across every path, in first-seen order. If no
+CODEOWNERS file exists, or nothing matches, it is an empty list and each
+file's "source" explains why -- this is not an error, it's a normal
+outcome that /triage-tests must handle by filing without an assignee
 rather than guessing or crashing.
+
+With --github-repo (needs an authenticated `gh`), the owners are turned
+into what GitHub will actually accept, and three more fields are added:
+
+    "assignees":    individual logins that are assignable on the repo --
+                    direct @user owners first, then members of @org/team
+                    owners when the token can list them; capped at 10,
+                    GitHub's limit
+    "reviewers":    owners to request PR review from: assignable users plus
+                    "org/team" slugs, minus the authenticated user (GitHub
+                    refuses a review request from a PR's own author)
+    "mention_only": owners that cannot be assigned -- emails, users without
+                    repo access, teams whose members can't be listed. Name
+                    them in the issue/PR body so they are still notified.
+    "notes":        why anything landed in mention_only or was cut
 """
 
 import argparse
 import fnmatch
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 CODEOWNERS_LOCATIONS = ["CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS"]
+MAX_ASSIGNEES = 10  # GitHub rejects more than this on one issue or PR
 
 
 def find_codeowners(repo_root):
@@ -97,13 +121,94 @@ def resolve_owners(path, repo_root="."):
     }
 
 
+def _gh(args):
+    proc = subprocess.run(["gh"] + args, capture_output=True, text=True)
+    return proc.returncode, proc.stdout.strip()
+
+
+def resolve_assignment(owners, github_repo):
+    """Turn CODEOWNERS entries into assignees/reviewers GitHub will accept."""
+    result = {"assignees": [], "reviewers": [], "mention_only": [], "notes": []}
+    if shutil.which("gh") is None:
+        result["mention_only"] = list(owners)
+        result["notes"].append("gh is not installed -- nothing could be checked, so nobody is assigned")
+        return result
+
+    assignable_cache = {}
+
+    def assignable(login):
+        if login not in assignable_cache:
+            code, _ = _gh(["api", "--silent", f"repos/{github_repo}/assignees/{login}"])
+            assignable_cache[login] = code == 0
+        return assignable_cache[login]
+
+    # The PR author can't be requested as its own reviewer. Under an Actions
+    # GITHUB_TOKEN this lookup fails, which is fine -- the bot owns nothing.
+    code, me = _gh(["api", "user", "--jq", ".login"])
+    me = me.lower() if code == 0 else None
+
+    direct, from_teams = [], []
+    for owner in owners:
+        if not owner.startswith("@"):
+            result["mention_only"].append(owner)
+            result["notes"].append(f"{owner} is an email address -- GitHub can't assign by email")
+            continue
+        name = owner[1:]
+        if "/" in name:
+            org, team = name.split("/", 1)
+            result["reviewers"].append(name)
+            code, out = _gh(["api", "--paginate", f"orgs/{org}/teams/{team}/members", "--jq", ".[].login"])
+            members = [m for m in out.splitlines() if m] if code == 0 else []
+            if not members:
+                result["mention_only"].append(owner)
+                result["notes"].append(
+                    f"{owner} is a team and its members couldn't be listed (the token may lack "
+                    "read:org) -- mention it so the team is notified"
+                )
+            from_teams.extend(m for m in members if assignable(m))
+        elif assignable(name):
+            direct.append(name)
+            if name.lower() != me:
+                result["reviewers"].append(name)
+        else:
+            result["mention_only"].append(owner)
+            result["notes"].append(f"{owner} can't be assigned on {github_repo} (no access to the repo)")
+
+    seen = set()
+    for login in direct + from_teams:
+        if login.lower() not in seen:
+            seen.add(login.lower())
+            result["assignees"].append(login)
+    if len(result["assignees"]) > MAX_ASSIGNEES:
+        result["notes"].append(
+            f"{len(result['assignees'])} assignable owners -- kept the first {MAX_ASSIGNEES} "
+            "(direct owners before team members), GitHub's limit"
+        )
+        result["assignees"] = result["assignees"][:MAX_ASSIGNEES]
+    return result
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("path", help="repo-relative path to resolve an owner for")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("paths", nargs="+", help="repo-relative paths to resolve owners for")
     parser.add_argument("--repo-root", default=".", help="repo root to search for CODEOWNERS")
+    parser.add_argument(
+        "--github-repo",
+        help="OWNER/REPO -- also check who GitHub will accept as assignee/reviewer (calls gh)",
+    )
     args = parser.parse_args()
 
-    result = resolve_owners(args.path, args.repo_root)
+    files = [resolve_owners(path, args.repo_root) for path in args.paths]
+    owners = []
+    for f in files:
+        owners.extend(o for o in f["owners"] if o not in owners)
+
+    result = {"files": files, "owners": owners}
+    if args.github_repo:
+        if owners:
+            result.update(resolve_assignment(owners, args.github_repo))
+        else:
+            result.update({"assignees": [], "reviewers": [], "mention_only": [], "notes": []})
     print(json.dumps(result, indent=2))
     sys.exit(0)
 

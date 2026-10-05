@@ -29,50 +29,111 @@ for the CI design.
 | `--live` | Actually file issues and open PRs (see [Filing issues and PRs from your machine](#filing-issues-and-prs-from-your-machine)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
 
-## Install (one step)
+## Install
 
-This repo is packaged as a Claude Code plugin — and doubles as its own
-marketplace — so it installs with two commands, run from anywhere (no need
-to clone or `cd` into this repo first).
+You only do this once per computer. It takes about 5 minutes.
 
-**Before you start: the repo is private.** Only members of the
-Cognify-Analytics GitHub org can install it, and Claude Code clones it
-with your existing git credentials. It never prompts for a password, so
-set up access first, using either of these:
+### What you need before you start
 
-- **HTTPS:** `gh auth login`, then `gh auth setup-git`, so git uses your
-  `gh` login.
-- **SSH:** a GitHub SSH key loaded in `ssh-agent`. Claude Code tries SSH
-  first and falls back to HTTPS. If you have no GitHub SSH key, set
-  `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` to skip the SSH attempt.
+- **Claude Code** installed and working. If typing `claude` in a terminal
+  opens it, you're good.
+- **A GitHub account in the Cognify-Analytics org.** This repo is
+  private. If you can't open
+  <https://github.com/Cognify-Analytics/Agentic-QE> in your browser, ask
+  an org admin to add you first. None of the steps below will work until
+  you can.
 
-To confirm it works, run
-`git ls-remote https://github.com/Cognify-Analytics/Agentic-QE.git`. If
-that lists refs without asking for a password, you're set.
+### Step 1 — Install the GitHub CLI
 
-Then install:
+Claude Code downloads the plugin straight from GitHub, so your computer
+has to be logged in to GitHub. The GitHub CLI (`gh`) is the easiest way
+to do that.
+
+Open a terminal and run the command for your system:
+
+| System | Command |
+|---|---|
+| Windows | `winget install --id GitHub.cli` |
+| macOS | `brew install gh` |
+| Linux | Follow <https://github.com/cli/cli#installation> |
+
+Then **close the terminal and open a new one**, so it can find `gh`.
+
+### Step 2 — Log in to GitHub
+
+1. Run:
+   ```
+   gh auth login
+   ```
+2. Answer its questions like this:
+   - *Where do you use GitHub?* → **GitHub.com**
+   - *What is your preferred protocol?* → **HTTPS**
+   - *Authenticate Git with your GitHub credentials?* → **Yes**
+   - *How would you like to authenticate?* → **Login with a web browser**
+3. It shows a one-time code. Press Enter, paste the code into the browser
+   page that opens, and approve.
+4. Run this once, so git uses the same login:
+   ```
+   gh auth setup-git
+   ```
+
+### Step 3 — Check you can reach the repo
+
+Run:
 
 ```
-/plugin marketplace add Cognify-Analytics/Agentic-QE
-/plugin install agentic-qe@agentic-qe-marketplace
+git ls-remote https://github.com/Cognify-Analytics/Agentic-QE.git
 ```
 
-(Or from a regular shell: `claude plugin marketplace add Cognify-Analytics/Agentic-QE`
-then `claude plugin install agentic-qe@agentic-qe-marketplace`.)
+- **You see lines of letters and numbers:** it works. Go to Step 4.
+- **You see an error, or it asks for a password:** stop here and see
+  [If something goes wrong](#if-something-goes-wrong).
 
-That's it — the four skills are then available in **any** project, and
-Claude will also invoke them automatically when a request matches what
-they do. Background updates use the same stored credentials, so nothing
-else is needed to stay current.
+### Step 4 — Install the plugin
 
-If the add fails with `Failed to clone marketplace repository` (or
-`SSH/HTTPS authentication failed`), it's almost always access: you're not
-in the org yet, or git has no stored credentials for GitHub. A private
-repo you can't see fails exactly like a misspelled one.
+1. Start Claude Code (from any folder):
+   ```
+   claude
+   ```
+2. Type these two commands into Claude Code, one at a time:
+   ```
+   /plugin marketplace add Cognify-Analytics/Agentic-QE
+   /plugin install agentic-qe@agentic-qe-marketplace
+   ```
+3. Quit Claude Code and start it again.
 
-To pin a branch or tag instead of the latest commit on `main`, add
-`#<ref>` to the marketplace command, e.g.
-`/plugin marketplace add Cognify-Analytics/Agentic-QE#<tag>`.
+### Step 5 — Check it worked
+
+In Claude Code, type `/agentic-qe:` and you should see four commands:
+
+- `/agentic-qe:generate-tests`
+- `/agentic-qe:build-context`
+- `/agentic-qe:triage-tests`
+- `/agentic-qe:test-pipeline`
+
+You're done. The commands now work in every project on this computer, and
+they update themselves. Next: [Run it locally](#run-it-locally).
+
+### If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| `gh: command not found` or `'gh' is not recognized` | Close the terminal and open a new one. Still failing? Redo Step 1. |
+| Step 3 fails, or Claude Code says `Failed to clone marketplace repository` | Make sure you can open the repo in your browser (you must be in the org). Then redo Step 2. |
+| `SSH authentication failed` | Claude Code tried an old SSH key instead of your Step 2 login. Set the environment variable `CLAUDE_CODE_PLUGIN_PREFER_HTTPS` to `1`, open a new terminal, and redo Step 4. |
+| The `/agentic-qe:` commands don't show up | Restart Claude Code. Still missing? Type `/plugin` and check `agentic-qe` is listed and enabled. |
+
+<details>
+<summary>Optional: install a specific version</summary>
+
+To stay on one release instead of always getting the latest, put `#` and
+the release's tag name after the repo in the first Step 4 command:
+
+```
+/plugin marketplace add Cognify-Analytics/Agentic-QE#<tag>
+```
+
+</details>
 
 ## Run it locally
 
@@ -130,12 +191,49 @@ those files off your "please commit" list.
 | Issues filed for suspected bugs | ✅ | ✅ |
 | Auto-fix PR for SIMPLE test fixes | ✅ | ✅ |
 | Bug-fix PRs (`fix_bugs`) | ✅ | ✅ |
+| Issues/PRs assigned to CODEOWNERS | ✅ | ✅ (teams mentioned, not expanded — see below) |
 | PR base | Your branch if pushed, else the default branch | The PR's own head branch |
 | GitHub credentials | Your `gh` login | The workflow's `GITHUB_TOKEN` |
 | `.qa/` committed | By you | By the workflow |
 | Sticky summary comment on the PR | — | ✅ |
 | Cost telemetry | — | ✅ |
 | "No production source changed" assertion | — | ✅ (fails the job) |
+
+### Who gets assigned
+
+If the target repo has a `CODEOWNERS` file (in the root, `.github/` or
+`docs/`), every issue and PR the pipeline opens is routed to the owners of
+the code involved:
+
+| Opened | Owners of | Assigned | Review requested |
+|---|---|---|---|
+| Issue for a suspected bug | The source module under the failing test | ✅ | — |
+| Auto-fix PR (SIMPLE test fixes) | The source modules the fixed tests cover | ✅ | ✅ |
+| Bug-fix PR (`fix_bugs`) | The source file(s) the fix changed | ✅ | ✅ |
+
+Re-running on a failure that already has an open issue adds any missing
+owners to that issue as assignees, instead of filing a duplicate.
+
+GitHub only accepts some owners as assignees, so `scripts/resolve_owners.py`
+checks each one first:
+
+- **`@user` with access to the repo:** assigned, and asked to review PRs.
+  You're never asked to review your own PR on a local run.
+- **`@org/team`:** asked to review PRs as a team. An issue can't be
+  assigned to a team, so its members are assigned instead, when the token
+  can list them. A local run with your `gh` login usually can. In CI the
+  workflow's `GITHUB_TOKEN` can't read org teams, so the team is
+  @mentioned on the issue instead, which still notifies it.
+- **Email addresses, and users without repo access:** @mentioned in the
+  body, never assigned.
+
+Owners are added in a separate step after the issue or PR is created. An
+owner GitHub rejects therefore never stops the issue or PR from being
+filed: the run records the error and carries on. GitHub caps assignees at
+10, so direct owners come before team members. With no `CODEOWNERS`, or no
+matching rule, nobody is assigned; the pipeline never guesses.
+Report-only runs list the owners in the drafted issue and don't contact
+GitHub.
 
 ## Run it as a GitHub Action
 
@@ -289,7 +387,7 @@ cheaper.
 - `templates/` — the GitHub issue and bug-fix PR templates, and the caller workflow to copy into a target repo
 - `scripts/` — helper scripts the skills shell out to:
   - `parse_coverage.py` — turns a Cobertura `coverage.xml` into the coverage JSON `.qa/test-inventory.json` uses
-  - `resolve_owners.py` — maps a file to its CODEOWNERS owner
+  - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
 - `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow

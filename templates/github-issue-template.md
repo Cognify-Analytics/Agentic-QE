@@ -1,8 +1,11 @@
 <!--
 Template for issues /triage-tests files for COMPLEX/AMBIGUOUS failures.
-Fill every {placeholder}. Omit the "Suggested owner" line entirely if
-scripts/resolve_owners.py found no owner (see its --no-owner-found behavior)
-rather than leaving a placeholder or guessing one.
+Fill every {placeholder}. Omit the "Owners" line entirely if
+scripts/resolve_owners.py returned "owners": [] rather than leaving a
+placeholder or guessing one. List every entry in "owners" -- the ones it
+could assign are also set as assignees (triage-tests, "Assigning
+CODEOWNERS"); naming them all here is what still notifies the
+"mention_only" ones (emails, teams, people without repo access).
 -->
 Title: [QA Pipeline] {short description of the suspected defect}
 
@@ -22,7 +25,7 @@ source you used instead (docstring, README, etc.), or say plainly that no
 documented expectation was found and the assertion looks like a directly
 observed behavioral gap.}
 
-**Suggested owner:** {@owner} (from CODEOWNERS: {matched path})
+**Owners:** {@owner, @org/team, ...} (from CODEOWNERS: {matched pattern})
 
 **We did not change any code.** This needs a human decision about which is
 correct — {the documented/expected behavior} or {the current implementation}.
