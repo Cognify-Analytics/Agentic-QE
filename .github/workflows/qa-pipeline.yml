@@ -1,0 +1,484 @@
+name: Agentic QE Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      setup_script:
+        description: Shell commands that install the target repo's dependencies (test framework included).
+        required: true
+        type: string
+      live:
+        description: Run /triage-tests in live mode (real branches/PRs/issues) instead of report-only.
+        required: false
+        type: boolean
+        default: false
+      fix_bugs:
+        description: >-
+          Opt-in, off by default. Let /triage-tests attempt an actual, narrowly-scoped
+          fix to production source for a small subset of COMPLEX bugs (only those backed
+          by a specific documented expectation — see rules/error-classification.md),
+          verify it against the full suite, and open a second PR linked to the issue
+          ("Relates to #N", never auto-closing it). Works independently of `live`:
+          with `live: false` it only computes and reports what it would fix. Requires
+          branch protection with required human review on the target branch before
+          turning this on for real — see README "Set it up in a target repo".
+        required: false
+        type: boolean
+        default: false
+      plugin_ref:
+        description: Agentic-QE tag/ref to pin the plugin checkout to.
+        required: false
+        type: string
+        default: main
+      node_version:
+        description: Node version to set up. Leave empty for repos with no JS/TS stack.
+        required: false
+        type: string
+        default: ''
+      max_turns:
+        description: >-
+          Turn budget for the Claude run. This is a ceiling that stops a runaway run, not
+          a target — lowering it does not make a normal run cheaper. Raise for large or
+          multi-stack repos.
+        required: false
+        type: number
+        default: 150
+      model:
+        description: >-
+          Model to run the pipeline on (e.g. claude-sonnet-5, claude-opus-5). Leave empty
+          for the action's default. Token volume, not model price, dominates the cost of a
+          run — see README "Cost and telemetry" before reaching for this.
+        required: false
+        type: string
+        default: ''
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      AGENTIC_QE_READ_TOKEN:
+        description: Token with read access to Cognify-Analytics/Agentic-QE, only needed while that repo is private.
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: qa-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.draft == false &&
+       !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
+    steps:
+      - name: Check out the target repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Check out the Agentic QE plugin
+        uses: actions/checkout@v4
+        with:
+          repository: Cognify-Analytics/Agentic-QE
+          ref: ${{ inputs.plugin_ref }}
+          path: .agentic-qe
+          token: ${{ secrets.AGENTIC_QE_READ_TOKEN || github.token }}
+
+      # The reusable workflow and the skills it drives are two separate checkouts at
+      # two separately-specified refs. Pinning them apart is silently destructive —
+      # a new workflow driving old skills produces behaviour neither version was
+      # tested with — so name it loudly rather than letting it look like a normal run.
+      - name: Check the plugin matches this workflow
+        env:
+          WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -uo pipefail
+          PLUGIN_SHA=$(git -C .agentic-qe rev-parse HEAD 2>/dev/null || echo unknown)
+          echo "plugin   (${{ inputs.plugin_ref }}): ${PLUGIN_SHA}"
+          echo "workflow                           : ${WORKFLOW_SHA:-unknown}"
+          if [ -n "${WORKFLOW_SHA:-}" ] && [ "${PLUGIN_SHA}" != "unknown" ] \
+             && [ "${PLUGIN_SHA}" != "${WORKFLOW_SHA}" ]; then
+            echo "::warning::plugin_ref '${{ inputs.plugin_ref }}' (${PLUGIN_SHA}) is not the same commit as the reusable workflow (${WORKFLOW_SHA}). The workflow and the skills it drives are from different versions — set plugin_ref to the same ref you call the workflow at."
+          fi
+
+      - name: Keep scratch out of the diff
+        run: printf '%s\n' '.claude-pipeline/' '.agentic-qe/' >> .git/info/exclude
+
+      # Always set up Python: scripts/parse_coverage.py and scripts/resolve_owners.py
+      # need it even when the target repo has no Python stack of its own.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        if: inputs.node_version != ''
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install target repo dependencies
+        run: ${{ inputs.setup_script }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  'agentic-qe[bot]'
+          git config user.email 'agentic-qe[bot]@users.noreply.github.com'
+
+      - name: Decide strategy and write run.json
+        id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p .claude-pipeline
+
+          # A usable .qa/ baseline is what makes an incremental run possible at all.
+          HAVE_BASELINE=false
+          if [ -f .qa/test-inventory.json ] && [ -f .qa/context.md ] \
+             && jq -e '.modules' .qa/test-inventory.json >/dev/null 2>&1; then
+            HAVE_BASELINE=true
+          fi
+
+          # One diff, reused by both decisions below. Empty on workflow_dispatch,
+          # where there is no base to diff against.
+          CHANGED=''
+          if [ -n "${BASE:-}" ]; then
+            git fetch --no-tags origin "$BASE"
+            CHANGED=$(git diff --name-only --diff-filter=d "origin/$BASE...HEAD" || true)
+          fi
+
+          # --- Strategy: what should /generate-tests do? ---
+          TARGETS='[]'
+          if [ "$HAVE_BASELINE" = false ]; then
+            STRATEGY=bootstrap
+          else
+            SRC=$(printf '%s\n' "$CHANGED" \
+              | grep -Ev '(^|/)(tests?|spec|__tests__)/' \
+              | grep -E '\.(py|js|jsx|ts|tsx|java|kt|go|rb|cs|rs|php)$' || true)
+            if [ -z "$SRC" ]; then
+              STRATEGY=triage-only
+            else
+              STRATEGY=incremental
+              TARGETS=$(printf '%s\n' "$SRC" | jq -R . | jq -sc .)
+            fi
+          fi
+
+          # --- Can Stage 2 (/build-context) be skipped entirely? ---
+          # Sections 1-3 of context.md are derived only from docs, manifests and schema
+          # files. If none of those changed, those sections cannot have changed either,
+          # so regenerating them just to diff them is pure spend. Section 4 (coverage)
+          # is handled by the orchestrator, which also requires that Stage 1 left the
+          # inventory alone before it acts on this flag.
+          # Deliberately conservative: unless we have a real base diff proving nothing
+          # relevant changed, this stays true and Stage 2 runs as before.
+          CTX_INPUTS_CHANGED=true
+          if [ "$HAVE_BASELINE" = true ] && [ -n "${BASE:-}" ]; then
+            CTX_HITS=$(printf '%s\n' "$CHANGED" | grep -Ei \
+              -e '(^|/)readme' \
+              -e '(^|/)docs?/' \
+              -e '\.(md|rst|sql|prisma|proto|graphql)$' \
+              -e '(^|/)(migrations?|models?|schemas?|entities|domain)/' \
+              -e '(^|/)(pyproject\.toml|setup\.cfg|package\.json|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|go\.mod|Cargo\.toml|[^/]+\.csproj)$' \
+              || true)
+            [ -z "$CTX_HITS" ] && CTX_INPUTS_CHANGED=false
+          fi
+
+          jq -n \
+            --arg sha "$(git rev-parse --short HEAD)" \
+            --arg branch "${{ github.head_ref || github.ref_name }}" \
+            --arg ts "$(date -u +%FT%TZ)" \
+            --arg strategy "$STRATEGY" \
+            --argjson targets "$TARGETS" \
+            --argjson pr "${{ github.event.pull_request.number || 'null' }}" \
+            --argjson live "${{ inputs.live && 'true' || 'false' }}" \
+            --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
+            --argjson ctx_changed "$CTX_INPUTS_CHANGED" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
+            { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
+              ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
+                    strategy:$strategy, targets:$targets,
+                    context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
+
+          cat .claude-pipeline/run.json
+
+      - name: Run the QA pipeline
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
+          prompt: '/agentic-qe:test-pipeline'
+          track_progress: false
+          settings: |
+            { "env": { "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
+                       "GH_REPO":  "${{ github.repository }}" } }
+          claude_args: |
+            --model sonnet
+            --plugin-dir ./.agentic-qe
+            --max-turns ${{ inputs.max_turns }}
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash"
+            ${{ inputs.model && format('--model {0}', inputs.model) || '' }}
+
+      # Cost/turn telemetry. Deliberately never fails the job — a missing or
+      # reshaped execution log costs us a data point, not a run.
+      - name: Collect telemetry
+        id: telemetry
+        if: always()
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          set -uo pipefail
+          # This step runs on always(), so it can be reached even if the plan step
+          # (which normally creates this) never got there.
+          mkdir -p .claude-pipeline
+
+          # An earlier step failing (dependency setup is the usual one) skips the
+          # pipeline entirely. Reporting "$n/a over n/a turns" for that reads like a
+          # run that happened and cost nothing, which is worse than saying nothing.
+          if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
+            echo "The pipeline never ran — an earlier step failed. No telemetry to collect."
+            printf '%s\n' '{"schema_version":1,"conclusion":"did-not-run"}' > .claude-pipeline/telemetry.json
+            { echo "### Agentic QE"
+              echo
+              echo "The pipeline did not run: a step before it failed — most often \`setup_script\` not matching the repo's layout. See the job log."
+            } >> "$GITHUB_STEP_SUMMARY" || true
+            exit 0
+          fi
+
+          # Search the execution log recursively for the object carrying cost, rather
+          # than assuming a fixed position/shape, so an action upgrade can't break this.
+          RESULT='{}'
+          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+            RESULT=$(jq -c '[.. | objects | select(has("total_cost_usd"))] | last // {}' \
+                     "$EXEC_FILE" 2>/dev/null || echo '{}')
+            cp "$EXEC_FILE" .claude-pipeline/execution-log.json 2>/dev/null || true
+          fi
+
+          # Per-stage outcomes, written by /test-pipeline. This is what proves whether
+          # a stage was actually skipped rather than just quietly cheap.
+          STAGES=$(jq -c '.' .claude-pipeline/stages.json 2>/dev/null || echo 'null')
+          RUN=$(jq -c '.' .claude-pipeline/run.json 2>/dev/null || echo '{}')
+
+          jq -n \
+            --argjson result "$RESULT" \
+            --argjson stages "$STAGES" \
+            --argjson run "$RUN" \
+            --arg repo "${{ github.repository }}" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg conclusion "${{ steps.claude.outcome }}" \
+            --arg model "${{ inputs.model || 'action-default' }}" \
+            --argjson max_turns "${{ inputs.max_turns }}" '
+            { schema_version: 1,
+              repo: $repo, run_id: $run_id, run_url: $run_url,
+              conclusion: $conclusion,
+              sha:      ($run.sha      // null),
+              branch:   ($run.branch    // null),
+              timestamp:($run.timestamp // null),
+              pr_number:($run.ci.pr_number // null),
+              strategy: ($run.ci.strategy  // null),
+              context_inputs_changed: ($run.ci.context_inputs_changed // null),
+              live:     ($run.live     // null),
+              fix_bugs: ($run.fix_bugs // null),
+              model: $model,
+              max_turns: $max_turns,
+              cost_usd:    ($result.total_cost_usd // null),
+              num_turns:   ($result.num_turns      // null),
+              duration_ms: ($result.duration_ms    // null),
+              usage:       ($result.usage          // {}),
+              stages: $stages }' > .claude-pipeline/telemetry.json 2>/dev/null \
+            || echo '{"schema_version":1,"error":"telemetry assembly failed"}' > .claude-pipeline/telemetry.json
+
+          COST=$(jq -r '.cost_usd  // "n/a"' .claude-pipeline/telemetry.json)
+          TURNS=$(jq -r '.num_turns // "n/a"' .claude-pipeline/telemetry.json)
+          STRAT=$(jq -r '.strategy  // "n/a"' .claude-pipeline/telemetry.json)
+
+          { echo "### Agentic QE — run cost"
+            echo
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Cost (USD) | \`$COST\` |"
+            echo "| Turns | \`$TURNS\` |"
+            echo "| Strategy | \`$STRAT\` |"
+            echo "| Model | \`${{ inputs.model || 'action-default' }}\` |"
+            echo
+            echo "<details><summary>Full telemetry JSON</summary>"
+            echo
+            echo '```json'
+            cat .claude-pipeline/telemetry.json
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          echo "cost=$COST"   >> "$GITHUB_OUTPUT"
+          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Agentic QE cost::\$$COST over $TURNS turns (strategy: $STRAT)"
+          exit 0
+
+      - name: Assert no production source was changed
+        id: assert
+        if: always()
+        env:
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          set -euo pipefail
+
+          # If the pipeline never ran, this check would pass on an untouched tree and
+          # look like a clean bill of health. Say plainly that it was not exercised —
+          # a vacuous pass on the one safety-critical assertion is worth naming.
+          if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
+            echo "Pipeline did not run — nothing to assert (this check was not exercised)."
+            exit 0
+          fi
+          # Multi-stack repos (see skills/generate-tests's "stacks" schema) have no single
+          # top-level test_location — join every stack's instead. Falls back to "tests/" if
+          # 01-tests.json is missing/malformed (e.g. the run failed before writing it).
+          LOC=$(jq -r 'if has("stacks") then ([.stacks[].test_location] | join("|")) else (.test_location // "tests/") end' \
+                .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
+          BAD=$(git status --porcelain | awk '{print $2}' \
+                | grep -Ev "^(${LOC}|\.qa/|\.claude-pipeline/)" || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::pipeline modified files outside the test location:"
+            echo "$BAD"
+            exit 1
+          fi
+
+      # Persist the pipeline's own bookkeeping to the repo.
+      #
+      # This is deliberately a workflow step rather than a model instruction. It runs
+      # after every stage has finished, so .qa/runs/<date>-<sha>.json — which the
+      # orchestrator only writes at the very end — is actually on disk by the time
+      # anything commits it. /triage-tests used to be asked to commit that file from
+      # Stage 3, before it existed, which is why CI runs recorded nothing.
+      #
+      # Runs in report-only mode too: report-only is about not filing issues and not
+      # touching the developer's code, not about withholding the pipeline's own log.
+      - name: Record the run in .qa/
+        if: always() && steps.assert.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          set -uo pipefail
+
+          # The assert step above exits 0 when the pipeline never ran, so this step's
+          # gate would still let it through. There is nothing to record in that case.
+          if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
+            echo "Pipeline did not run — nothing to record."
+            exit 0
+          fi
+
+          git add -- .qa/ 2>/dev/null || true
+          if git diff --cached --quiet 2>/dev/null; then
+            # Tell apart "genuinely nothing new" from "changes exist but git refuses to
+            # stage them" — almost always .qa/ being gitignored. Reporting the first
+            # when it is really the second is what makes this silent and hard to debug.
+            IGNORED=$(git status --porcelain --ignored=matching -- .qa/ 2>/dev/null | grep '^!!' || true)
+            if [ -n "${IGNORED}" ]; then
+              echo "::warning::.qa/ has content but is git-ignored in this repo, so the pipeline's output cannot be recorded. Remove the .qa entry from .gitignore."
+            else
+              echo "No .qa/ changes to record."
+            fi
+            exit 0
+          fi
+
+          SHA=$(git rev-parse --short HEAD)
+          git commit -q \
+            -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
+            -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
+
+          # PRD Section 9 Rule 5: never push to a default branch. The recommended
+          # first-run bootstrap is a workflow_dispatch, which runs against exactly
+          # that — so this case gets its own branch and a PR instead of being dropped.
+          if [ -z "${HEAD_BRANCH}" ] || [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
+            QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            if git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
+              cat > qa-baseline-pr.md <<EOF
+          Adds the Agentic QE baseline and run record for \`${SHA}\`. Only \`.qa/\` is
+          touched — no production source, no tests.
+
+          Merging this is what lets the next run go incremental instead of
+          bootstrapping the whole repo from scratch.
+
+          [Run log](${RUN_URL})
+          EOF
+              gh pr create --base "${DEFAULT_BRANCH}" --head "${QA_BRANCH}" \
+                --title "Agentic QE: record run ${SHA}" \
+                --body-file qa-baseline-pr.md 2>/dev/null \
+                || echo "A PR for ${QA_BRANCH} already exists."
+              rm -f qa-baseline-pr.md
+              echo "Recorded on ${QA_BRANCH} (refused to push to default branch ${DEFAULT_BRANCH})."
+            else
+              echo "::warning::Could not push ${QA_BRANCH} — the record is in the run artifact only."
+            fi
+            exit 0
+          fi
+
+          # Normal PR run: commit straight onto the PR's own head branch, so the record
+          # travels with the developer's PR and reaches the default branch when they
+          # merge it. A GITHUB_TOKEN push does not re-trigger workflows, so no loop.
+          for attempt in 1 2 3; do
+            if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
+              echo "Recorded .qa/ on ${HEAD_BRANCH}."
+              exit 0
+            fi
+            echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
+            git fetch --no-tags origin "${HEAD_BRANCH}" || true
+            git rebase "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
+            sleep 3
+          done
+          echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+          exit 0
+
+      - name: Post summary comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          COST=$(jq -r '.cost_usd  // "n/a"' .claude-pipeline/telemetry.json 2>/dev/null || echo 'n/a')
+          TURNS=$(jq -r '.num_turns // "n/a"' .claude-pipeline/telemetry.json 2>/dev/null || echo 'n/a')
+          STRAT=$(jq -r '.strategy  // "n/a"' .claude-pipeline/telemetry.json 2>/dev/null || echo 'n/a')
+          { echo '<!-- agentic-qe-summary -->'
+            cat .claude-pipeline/summary.md 2>/dev/null || echo 'QA pipeline did not complete — see the run log.'
+            echo
+            echo "_\$$COST · $TURNS turns · strategy \`$STRAT\` · [run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})_"
+          } > body.md
+          ID=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+               --jq '.[] | select(.body | contains("agentic-qe-summary")) | .id' | head -1)
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$ID" -F body=@body.md
+          else
+            gh pr comment "$PR" --body-file body.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-pipeline-${{ github.run_id }}
+          include-hidden-files: true
+          path: |
+            .claude-pipeline/
+            .qa/
+          retention-days: 14
+
+      # Telemetry outlives the scratch artifact on purpose: cost trends only become
+      # readable across dozens of runs, which is well past 14 days.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-telemetry-${{ github.run_id }}
+          path: .claude-pipeline/telemetry.json
+          retention-days: 90

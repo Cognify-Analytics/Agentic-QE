@@ -19,11 +19,19 @@ and written out in full, but nothing is actually pushed or filed. Report-only
 is the default because this project is still early in its build — treat
 `--live` as something the user opts into, not the default you assume.
 
+Also pass `--fix-bugs` to turn on the opt-in bug-fix mode (Step 7.5/8.5) —
+off by default, unrelated to `--live` (it works in either mode: report-only
+`--fix-bugs` computes and shows what it *would* fix without touching any
+file; `--live --fix-bugs` actually applies it). See Ground rule 1 below and
+PRD Section 9.1 before turning this on.
+
 When invoked by `/test-pipeline` rather than directly, mode comes from
-`.claude-pipeline/run.json`'s `"live"` field instead of `$ARGUMENTS` (the
-orchestrator writes that file before invoking any stage, and forwards
-`--live` in its own invocation too — check either, they must agree; if
-they don't, trust `run.json` and note the mismatch in `03-triage.json`).
+`.claude-pipeline/run.json`'s `"live"` and `"fix_bugs"` fields instead of
+`$ARGUMENTS` (the orchestrator writes that file before invoking any stage,
+and forwards `--live`/`--fix-bugs` in its own invocation too — check
+either, they must agree; if they don't, trust `run.json` and note the
+mismatch in `03-triage.json`). A missing `"fix_bugs"` field means off —
+never infer it as on.
 
 ## The one rule that matters most
 
@@ -34,7 +42,12 @@ that one. When in doubt, escalate — never guess your way to SIMPLE.
 ## Ground rules (Section 9 of the PRD — non-negotiable, live or report-only)
 
 1. Never change production source code. A fix that would require a source
-   change is automatically COMPLEX.
+   change is automatically COMPLEX. **The one narrow, explicit exception:**
+   when `fix_bugs` is on (see Step 7.5), a bounded, capped, verified fix may
+   be attempted for a small subset of COMPLEX failures — never silently,
+   never by default, and never without the issue from Step 7 already
+   existing first. Everyone who doesn't turn `fix_bugs` on gets exactly the
+   original rule with no exception.
 2. Never edit a test that is not `generated_by_qa: true` for its module in
    `.qa/test-inventory.json`. A human-written test that fails goes straight
    to COMPLEX, no matter what the failure looks like.
@@ -50,6 +63,28 @@ that one. When in doubt, escalate — never guess your way to SIMPLE.
 
 ## Instructions
 
+### Step 0 — Local `--live` runs: confirm GitHub access
+
+**Skip this step in report-only mode and in CI mode** (`run.json`'s
+`"mode"` is `"ci"` — the workflow already supplies `GH_TOKEN`, `GH_REPO`
+and `ci.pr_base_branch`).
+
+For a local `--live` run, you need the same three things CI gets for free:
+which repo to file against, which remote to push to, and which branch a PR
+should target. If `.claude-pipeline/run.json` has a `"local"` object,
+`/test-pipeline` already established them — use it. Otherwise (you were
+invoked directly), run `python ${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py`
+yourself and use its output the same way. If it reports `"ok": false`,
+stop before running any test, show the user every entry in `problems`, and
+tell them they can fix those or re-run without `--live`. Do not silently
+fall back to report-only.
+
+Everywhere below that says "the local repo/remote/base/start branch", it
+means these values: `repo`, `remote`, `pr_base_branch`, `start_branch`.
+Pass `--repo <repo>` on every `gh issue`/`gh pr` command in a local live
+run, so `gh` never has to guess between several remotes, and push only to
+`<remote>`.
+
 ### Step 1 — Read the context
 
 Read `.qa/context.md` if it exists. You cannot judge whether a failure is a
@@ -61,21 +96,71 @@ current git SHA (or, if this repo has no git history yet, from
 `.qa/test-inventory.json`'s `last_updated_sha`), warn that the context may be
 stale and carry on with less confidence.
 
-### Step 2 — Get the test command
+### Step 2 — Get the test command(s)
 
-Read `test_command` from `.qa/test-inventory.json`. If that file is missing,
-fall back to `.claude-pipeline/01-tests.json`. **Do not guess the test
-command** — if neither file has it, stop and ask the user.
+Read `.qa/test-inventory.json`. **Check for a `stacks` object first** — if
+present, this is a multi-stack repo (see `/generate-tests`' multi-stack
+variant of this file): read every stack's `test_command` under
+`stacks.<name>.test_command`, there is no single top-level `test_command`
+to read in this shape. If `stacks` is absent, read the single top-level
+`test_command` as before.
+
+If `.qa/test-inventory.json` is missing entirely, fall back to
+`.claude-pipeline/01-tests.json` (same `stacks`-or-flat check applies
+there too). **Do not guess the test command** — if neither file has it (for
+any stack, in a multi-stack repo): **in CI mode**
+(`.claude-pipeline/run.json` exists with `"mode"` `"ci"`), write
+`.claude-pipeline/03-triage.json` with `"status": "failed"` and a
+`"reason"` explaining the test command couldn't be found, and stop.
+**Interactively**, stop and ask the user.
+
+**Run every stack, always.** Even if this CI run's `ci.targets` only
+touched one stack (that only matters to `/generate-tests`), run *every*
+stack's full suite here — a bug in a stack the PR didn't touch is still a
+bug, and skipping it would silently shrink triage's coverage every run.
 
 ### Step 3 — Run the tests
 
-Run the test command. Save the full raw output to
-`.claude-pipeline/raw-test-output.txt`.
+**Redirect the output to a file; never let the full run stream into your
+context.** A passing suite's output can run to thousands of lines, and
+every one of them would be tokens spent to learn "nothing failed."
+
+Run the test command with its output redirected to
+`.claude-pipeline/raw-test-output.txt` and capture the exit code, e.g.
+`<test command> > .claude-pipeline/raw-test-output.txt 2>&1; echo "exit=$?"`.
+Then read **only the tail** (the last ~15 lines) to get the totals line.
+
+**Multi-stack:** run each stack's test command separately (in that stack's
+own subtree/environment — they are typically incompatible runtimes), and
+save each stack's raw output to its own
+`.claude-pipeline/raw-test-output-<stack>.txt` (e.g.
+`raw-test-output-backend.txt`, `raw-test-output-frontend.txt`) instead of
+one combined file — two frameworks' output interleaved in one file is not
+reliably parseable. Capture one exit code per stack.
+
+**If every stack exited 0 (a green suite): stop here.** There are no
+failures to classify, so Steps 4 through 8.5 have nothing to act on. Record
+the totals from the tail you already read, skip to Step 9, and write
+`03-triage.json` with empty `classifications`/`fixes_applied`/
+`issues_created`. Do **not** read the raw output file — it is kept on disk
+for the CI artifact (so a disputed run is still arguable after the fact),
+not for you to load. In a CI run, `.qa/` may still have changes to commit,
+so Step 8 still applies even on a green suite; go there, then Step 9.
 
 ### Step 4 — Extract every failure
 
+*(Only reached when at least one stack failed — see Step 3.)*
+
+**Pull out failures with targeted searches, not by reading the whole
+file.** Grep the raw output for the framework's failure markers (`FAILED`,
+`FAIL `, `Error:`, `--- FAIL:`, `✕`, etc.) to get the list, then read only
+the surrounding block for each one — reading a 5,000-line log to find 3
+failures costs far more than 3 targeted reads.
+
 For each failing test, pull out: test name, file, error type, message, and
-stack trace/traceback.
+stack trace/traceback. **Multi-stack:** also record which stack each
+failure came from (the file path's stack, per Step 2) — Step 9's output
+schema carries a `"stack"` field per failure for exactly this.
 
 ### Step 5 — Read the rules and classify
 
@@ -121,33 +206,177 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
    module. It returns `owners: []` if there's no CODEOWNERS or no match —
    that's a normal outcome, not an error; file the issue without an
    assignee rather than guessing one.
-2. **Look for an existing open issue first**, GitHub MCP server if
-   available, otherwise the `gh` CLI (`gh issue list --search ...`). If one
-   clearly matches this failure, comment on it instead of opening a new one.
-3. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
-   filling in the failure output, the relevant excerpt of `.qa/context.md`
-   (or whatever you used in its absence, per Step 1), and the resolved
-   owner if any.
-4. **Report-only mode (default):** do not actually call the GitHub MCP
+2. **Build a stable fingerprint for this failure**: `{test name} ({file})` —
+   e.g. `calculate_discount_premiumTier_returnsDocumentedRate
+   (tests/test_pricing.py)`. Put it verbatim in the issue title (prefixed by
+   the template's own title convention, if any). This is what makes a
+   re-run idempotent — a run's issue for the same failure must always
+   produce the same title.
+3. **Look for an existing open issue first**, GitHub MCP server if
+   available, otherwise the `gh` CLI (`gh issue list --search ...`) —
+   search on the fingerprint from step 2, not just free-text keywords. If
+   one clearly matches this failure, comment on it instead of opening a new
+   one — this is what keeps a re-triggered run (e.g. `workflow_dispatch` on
+   the same PR) from filing a duplicate every time.
+4. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
+   filling in the fingerprinted title, the failure output, the relevant
+   excerpt of `.qa/context.md` (or whatever you used in its absence, per
+   Step 1), and the resolved owner if any.
+5. **Report-only mode (default):** do not actually call the GitHub MCP
    server or `gh` — write the fully-drafted issue/comment content into
    `03-triage.json`'s `issues_created`/`issues_commented` and show it on
    screen, clearly marked `[REPORT-ONLY — not filed]`.
-5. **`--live` mode:** actually create the issue (GitHub MCP server first; if
+6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
-   `gh issue comment`) and record the real URL.
+   `gh issue comment` — with `--repo` set to the local repo when running
+   locally, per Step 0) and record the real URL.
 
 **Cap: 10 issues per run.** Beyond that, stop opening individual issues and
 combine everything past the cap into one summary issue. Record this in
 `caps_hit`.
 
+### Step 7.5 — Attempt a bug fix (opt-in: `fix_bugs`, off by default)
+
+**Skip this step entirely unless `fix_bugs` is on** (per the Arguments
+section above). This is the one narrow exception to Ground rule 1, and it
+must never activate silently — if you're not certain it's on, treat it as
+off.
+
+Run this once per COMPLEX failure, right after Step 7 has filed (or
+found/commented on) its issue. **Never attempt a fix for a failure that
+doesn't have an issue yet** — the issue is the paper trail this whole
+feature depends on, and Step 7.5 must never run ahead of it.
+
+**Check eligibility first — all of these must hold:**
+1. The failure's classification reason (Step 5) matches one of the two
+   "Yes" rows in `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md`'s
+   "Eligible for opt-in bug-fix mode?" column — i.e. there is a specific
+   documented expectation (a `.qa/context.md` line, a docstring, or
+   adjacent docs) that the code contradicts. A vague "this looks wrong"
+   is not enough.
+2. It is **not** a timing/race condition, **not** an integration-boundary
+   failure, **not** from a human-written test, and **not** AMBIGUOUS. All
+   four are always issue-only in v1, `fix_bugs` or not — see the table.
+3. This run hasn't hit the bug-fix cap yet (**3 per run** — separate from
+   Step 7's 10-issue cap).
+
+Any failure that fails even one of these checks gets an issue only,
+exactly as Step 7 already did — do not attempt a fix, and do not record a
+reason why in `bug_fix_prs_created` (that array is only for attempts, not
+every failure considered).
+
+**If eligible, attempt the fix:**
+1. Create a branch `auto-fix/bugfix-issue-<issue_number>` off the same
+   base Step 8 will use, if one doesn't already exist for this issue.
+2. Make the smallest possible change to production source that makes the
+   documented/expected behavior true — scoped to the file(s) the failure's
+   stack trace directly implicates. **Never edit the failing test itself
+   in this step** — that would silently do what Ground rule 1 exists to
+   prevent (rewrite the check instead of the code). If the smallest safe
+   fix would touch more than **2 files**, or any file the stack trace
+   doesn't point to, stop and abandon it — this is too large to attempt
+   blind. Record the abandonment in `escalated`, not `caps_hit` (it isn't
+   a limit, it's a scope judgment).
+3. Verify twice: re-run the specific failing test, then the **whole**
+   stack's suite (not just this test) — a change that fixes one test
+   while breaking three others is not a safe fix. Maximum **2 attempts**.
+   If it still isn't clean after 2, undo every change on the branch,
+   leave the issue as issue-only, and record the abandoned attempt (with
+   why) in `03-triage.json`'s `escalated`.
+4. **Report-only mode:** do not touch any file on disk. Write what the fix
+   *would* change — file(s), a one-line summary of the change, and what
+   verification would need to show — into `03-triage.json`'s
+   `bug_fix_prs_created`, marked `"report_only": true`, `"pr_url": null`.
+5. **`--live` mode:** commit the verified fix to the branch (nothing else
+   — keep it isolated from any SIMPLE-fix or `.qa/` commits) and push
+   (to the local remote from Step 0, when running locally). Do
+   not open the PR yet — that's Step 8.5, so both PR and issue-comment
+   links land together.
+
+**Cap: 3 bug-fix attempts per run.** Once hit, every remaining eligible
+failure stays issue-only (already filed in Step 7) — do not attempt a 4th.
+Record the cap in `caps_hit`.
+
 ### Step 8 — Open the PR for any fixes made
+
+**Pick the base branch first.** In CI mode (`.claude-pipeline/run.json`
+exists with `"mode"` `"ci"`), the PR must be based on `run.json`'s
+`ci.pr_base_branch` — this is the developer's own PR head branch, so the fix
+flows back into their PR rather than being stranded against the repo's
+default branch. **If `ci.pr_base_branch` is missing, do not guess a base —
+fall back to report-only for this step** (note what would have been opened,
+same as below, and record why in `03-triage.json`). Locally, base it on the
+local base branch from Step 0 — never on whatever branch happens to be
+checked out by now, since Step 6 has moved you onto the auto-fix branch.
+In report-only mode, where Step 0 was skipped, note the current branch as
+the would-be base.
+
+**This step commits test fixes only. Never commit `.qa/` here.** That
+folder is recorded separately — by the CI workflow's own "Record the run in
+`.qa/`" step, which runs after every stage has finished, and by the
+developer's own commit when running locally. The reason is a timing one:
+`.qa/runs/<date>-<sha>.json` is written by `/test-pipeline`'s Finish
+section, which runs *after* this stage, so it does not exist yet at this
+point in the run. Committing `.qa/` from here would silently miss the run
+record every time, and would now also duplicate what the workflow commits.
 
 If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
 - **Report-only mode:** note in `03-triage.json` and on screen what PR
   *would* be opened (branch, files changed, one-line summary per fix),
   marked `[REPORT-ONLY — not opened]`. Do not push the branch.
-- **`--live` mode:** push the branch and open a PR (GitHub MCP first, `gh
-  pr create` as fallback). Never merge it.
+- **`--live` mode:** create the branch if it doesn't already exist, commit
+  the SIMPLE fixes onto it, push (to the local remote from Step 0, when
+  running locally), and open a PR against the base branch
+  chosen above (GitHub MCP first, `gh pr create` as fallback). Never merge
+  it.
+
+If Step 6 produced no fixes, there is nothing to open a PR for — say so and
+move on. An empty run is a normal outcome, not a failure.
+
+### Step 8.5 — Open the PR for any bug fixes, and link it to the issue
+
+**Skip entirely unless `fix_bugs` is on and Step 7.5 produced at least one
+verified fix this run.** This PR is always separate from Step 8's — a
+production-code change and a test typo fix carry different review burdens,
+and a reviewer must be able to accept one without the other.
+
+For each fix Step 7.5 verified (branch `auto-fix/bugfix-issue-<issue_number>`
+already has the commit in `--live` mode):
+
+- **Report-only mode:** note in `03-triage.json` and on screen what PR
+  *would* be opened (branch, file(s) changed, the issue it relates to, the
+  verification results), marked `[REPORT-ONLY — not opened]`.
+- **`--live` mode:** push the branch if not already pushed, and open a PR
+  against the same base as Step 8 (GitHub MCP first, `gh pr create` as
+  fallback), using
+  `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` for the body.
+  The template's own warning banner and "Relates to #N" (never
+  "Fixes"/"Closes") are load-bearing — do not paraphrase them away. Record
+  the real PR URL. **Never merge it** — same Rule 4 as every other PR this
+  skill opens.
+- **Either mode:** comment on the issue Step 7 filed, linking back to this
+  PR (the real URL in `--live` mode, the report-only equivalent
+  otherwise) — the issue and the PR must reference each other in both
+  directions, not just PR → issue.
+
+### Step 8.9 — Local `--live` runs: put the developer back
+
+**Skip in CI** (the runner is thrown away) **and in report-only mode**
+(nothing was committed, so there is nothing to step away from).
+
+Steps 6 and 7.5 checked out `auto-fix/...` branches. On a CI runner that
+doesn't matter; on a developer's machine it would leave them on a bot
+branch. Once every push and PR above is done, run
+`git checkout <start_branch>` (from Step 0). Uncommitted work — `.qa/`, and
+any generated tests that were not committed to an auto-fix branch — comes
+back with you, as it went. A test file that *was* committed to the
+auto-fix branch stays there and leaves this working tree; that is
+intended, since it reaches `start_branch` when the developer merges the
+PR. Say so on screen and name the PR, so a missing file is never a surprise.
+
+If the checkout fails (a conflict with uncommitted changes), do not force
+it and do not stash anything. Tell the user which branch they are on, why
+the switch failed, and the exact command to get back.
 
 ### Step 9 — Write the result
 
@@ -196,6 +425,7 @@ gitignored, not committed.
       "drafted_body": "... full issue body from the template ..." }
   ],
   "issues_commented": [],
+  "bug_fix_prs_created": [],
   "escalated": [],
   "caps_hit": []
 }
@@ -206,6 +436,35 @@ gitignored, not committed.
 `"report_only": true` with the drafted content still fully present — a
 human reading this file must be able to see exactly what would have
 happened.
+
+`bug_fix_prs_created` is always `[]` unless `fix_bugs` was on for this run
+(see Step 7.5/8.5). Each entry:
+
+```json
+{
+  "pr_url": null,
+  "issue_url": null,
+  "test": "test_apply_discount_premium_tier",
+  "file_changed": "src/pricing.py",
+  "summary": "Changed premium tier discount rate from 0.10 to 0.15 to match docs/pricing.md",
+  "tests_rerun": { "target_test": "passed", "full_suite": "passed" },
+  "report_only": true
+}
+```
+
+`report_only`/`pr_url`/`issue_url` follow the same convention as
+`issues_created` above. An eligible failure that was attempted but
+abandoned (scope too large, or still failing after 2 attempts) does **not**
+get an entry here — it goes in `escalated` instead, with the reason.
+
+**Multi-stack variant:** `totals` stays the sum across every stack; add a
+`totals_by_stack` object alongside it, keyed by stack name, each value the
+same `{tests, passed, failed}` shape. Every entry in `classifications`,
+`fixes_applied`, `issues_created`, `issues_commented`, and
+`bug_fix_prs_created` carries a `"stack"` field naming which stack it came
+from, e.g.
+`{ "test": "test_require_user_access...", "file": "backend/tests/test_auth.py", "stack": "backend", "type": "COMPLEX", "reason": "..." }`.
+Nothing else in the schema changes.
 
 ---
 
@@ -219,12 +478,21 @@ Treat every failing test as if it were human-written (COMPLEX-only) until
 proven otherwise — the safe default when provenance is unknown. Say so in
 the run's notes.
 
-**Test command unknown and can't be found anywhere.** Stop and ask the user.
+**Test command unknown and can't be found anywhere.** In CI mode, write
+`03-triage.json` with `"status": "failed"` and stop — do not ask.
+Interactively, stop and ask the user.
 
 **GitHub MCP server not configured/available.** Fall back to the `gh` CLI.
 If `gh` isn't authenticated either, report-only mode still works fully
 (nothing needs to actually reach GitHub); in `--live` mode, stop and tell the
 user GitHub access isn't available rather than silently staying in
+report-only. Locally, Step 0's preflight should already have caught this
+before any test ran.
+
+**Local preflight refuses because the branch isn't pushed.** This is on
+purpose. CI always targets a branch that exists on GitHub; locally, an
+auto-fix branch cut from unpushed commits would carry them into the PR.
+The developer pushes first (`git push -u <remote> <branch>`), or runs
 report-only.
 
 **More than 10 COMPLEX/AMBIGUOUS failures.** File the first 10 individually,
@@ -234,11 +502,23 @@ then one combined summary issue for the rest, and record the cap in
 **A SIMPLE fix's second attempt also fails.** Undo it, relabel COMPLEX,
 move on — don't try a third time.
 
+**A bug fix's second attempt still fails, or the fix would touch more than
+2 files.** Undo every change on that branch, leave the failure issue-only
+(the issue from Step 7 stays as-is), and record the abandoned attempt in
+`escalated`. Never fall back to a partial or unverified fix.
+
+**More than 3 eligible bug fixes in one run.** Attempt the first 3, leave
+the rest issue-only, and record the cap in `caps_hit` — same pattern as the
+10-issue cap.
+
 ---
 
 ## Rules reference
 
-- `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, and the
-  human-written-test override
+- `${CLAUDE_PLUGIN_ROOT}/rules/error-classification.md` — SIMPLE / COMPLEX / AMBIGUOUS, the
+  human-written-test override, and which COMPLEX signals are eligible for
+  `fix_bugs`
 - `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
+- `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` — bug-fix PR body shape (Step 8.5, `fix_bugs` only)
 - `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)
+- `${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py` — local `--live` only: GitHub access, repo, remote and PR base (Step 0)

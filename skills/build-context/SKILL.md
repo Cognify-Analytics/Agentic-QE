@@ -20,10 +20,14 @@ rebuild regardless of what's already there.
 This skill can't shell out, so it can't run `git diff` to see what changed
 since the last build. The incremental-update logic below is built around
 that constraint deliberately — it re-reads the small set of source
-locations every time (cheap — a handful of files) and diffs the *freshly
-generated content* against what's currently in `.qa/context.md`, rather than
-trying to infer "what category of file changed" from git history it can't
-see. This still satisfies the actual requirement (unchanged repo → "context
+locations every time and diffs the *freshly generated content* against
+what's currently in `.qa/context.md`, rather than trying to infer "what
+category of file changed" from git history it can't see.
+
+That regenerate-then-diff pass is correct but not free: on a large repo it
+is the most expensive way to reach the answer "nothing changed." Step 0 is
+what avoids paying for it, using a diff computed upstream by something that
+*does* have git — the CI workflow. This still satisfies the actual requirement (unchanged repo → "context
 is current", no rewrite) without needing Bash. The "current SHA" stamped
 into the file comes from `.qa/test-inventory.json`'s `last_updated_sha` (that
 file's own skill, `/generate-tests`, does have Bash and stamps a real SHA)
@@ -32,6 +36,28 @@ file's own skill, `/generate-tests`, does have Bash and stamps a real SHA)
 ---
 
 ## Instructions
+
+### Step 0 — In CI, check whether anything you read from even changed
+
+**Do this before Step 1, and only when `.claude-pipeline/run.json` exists
+with `"mode": "ci"`.** If that file's `ci.context_inputs_changed` is
+`false`, the workflow diffed the PR and found no doc, manifest, schema or
+model file changed — the only inputs sections 1-3 are built from. Combined
+with an existing `.qa/context.md`, that means regenerating those sections
+could not produce anything different.
+
+In that case: say "Context is current (inputs unchanged)." and **stop
+without reading or writing anything else.**
+
+Two guards on this. `--rebuild` always wins — it forces the full path
+regardless. And a missing field means *changed*: only an explicit `false`
+lets you skip, so a stale or hand-written `run.json` can never silently
+suppress a rebuild.
+
+This is a backstop. In a normal CI run `/test-pipeline` doesn't invoke you
+at all when this holds (its Stage 2 gate also checks that no new tests were
+written, which it can see and you can't) — this step only catches a direct
+invocation.
 
 ### Step 1 — Read the template
 
@@ -69,6 +95,11 @@ coverage yourself.** If this file doesn't exist, section 4 says so plainly
 ("No test inventory found — run `/generate-tests` first.") and the header's
 `context_sha` is `unknown`.
 
+Check for a `stacks` object (see `/generate-tests`' multi-stack schema) —
+if present, this is a monorepo with more than one independently-tested
+stack (e.g. a Python backend, a TypeScript frontend); Step 7 reports each
+stack's numbers separately rather than a single overall figure.
+
 ### Step 4 — Section 1: what this project does
 
 Read the README, anything under `docs/`, the manifest's description field
@@ -96,6 +127,13 @@ var that isn't there just because the PRD's own worked example has one.
 Pull every number from `.qa/test-inventory.json` (Step 3) — overall
 coverage, per-module coverage bucketed into well/weakly/not-covered,
 framework, test location, and any `skipped_reason` entries as "known gaps."
+
+**Multi-stack (`stacks` present):** report this per stack — a "Backend
+(pytest)" subsection and a "Frontend (jest)" subsection (or whatever the
+stacks are named), each with its own overall coverage, framework, test
+location, and known gaps. Do not average or sum the stacks into one
+number; a combined "60% coverage" figure across two unrelated codebases
+and frameworks is not a number anyone can act on.
 
 ### Step 8 — Changelog
 
