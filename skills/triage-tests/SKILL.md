@@ -203,9 +203,13 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 ### Step 7 — COMPLEX/AMBIGUOUS: find the owner and check for an existing issue
 
 1. Run `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py <path>` for the failing file's source
-   module. It returns `owners: []` if there's no CODEOWNERS or no match —
-   that's a normal outcome, not an error; file the issue without an
-   assignee rather than guessing one.
+   module — in `--live` mode with `--github-repo <repo>` added (`$GH_REPO`
+   in CI, the local repo from Step 0 locally), so it also reports who
+   GitHub will actually accept as an assignee (see "Assigning CODEOWNERS"
+   below). In report-only mode leave the flag off: it calls GitHub, and
+   report-only never does. `owners: []` means no CODEOWNERS or no match —
+   a normal outcome, not an error; file the issue without an assignee
+   rather than guessing one.
 2. **Build a stable fingerprint for this failure**: `{test name} ({file})` —
    e.g. `calculate_discount_premiumTier_returnsDocumentedRate
    (tests/test_pricing.py)`. Put it verbatim in the issue title (prefixed by
@@ -221,7 +225,7 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 4. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
    filling in the fingerprinted title, the failure output, the relevant
    excerpt of `.qa/context.md` (or whatever you used in its absence, per
-   Step 1), and the resolved owner if any.
+   Step 1), and the resolved owners if any.
 5. **Report-only mode (default):** do not actually call the GitHub MCP
    server or `gh` — write the fully-drafted issue/comment content into
    `03-triage.json`'s `issues_created`/`issues_commented` and show it on
@@ -229,11 +233,43 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
    `gh issue comment` — with `--repo` set to the local repo when running
-   locally, per Step 0) and record the real URL.
+   locally, per Step 0) and record the real URL. Then assign it to the
+   code owners, per "Assigning CODEOWNERS" below. When you commented on an
+   existing issue instead, add any of this run's assignees it doesn't
+   already have — an issue nobody is assigned to is the one that sits.
 
 **Cap: 10 issues per run.** Beyond that, stop opening individual issues and
 combine everything past the cap into one summary issue. Record this in
 `caps_hit`.
+
+#### Assigning CODEOWNERS (issues and PRs, local and CI alike)
+
+Every issue and PR this skill opens goes to the people CODEOWNERS names for
+the code involved — the same rule in CI and locally, since both have `gh`.
+Use the `resolve_owners.py --github-repo` output; never add an owner it
+didn't return.
+
+- **Issues:** assign every login in `assignees`
+  (`gh issue edit <n> --repo <repo> --add-assignee a,b`).
+- **PRs:** assign `assignees` and request review from `reviewers`
+  (`gh pr edit <n> --repo <repo> --add-assignee a,b --add-reviewer c,org/team`).
+  GitHub also requests review from the code owners of the *changed* files
+  on its own; requesting `reviewers` explicitly matters because a test-fix
+  PR's changed files are tests, whose owners are often not the owners of
+  the code under test.
+- **`mention_only`** owners (emails, people without repo access, teams
+  whose members couldn't be listed) can't be assigned. Name them on the
+  issue/PR body's owners line instead so they are still notified.
+
+**Assign in a separate call after creating, never in the create call.** An
+assignee or reviewer GitHub rejects can fail `gh issue create`/`gh pr create`
+outright, and a lost issue is far worse than an unassigned one. If the
+follow-up call fails, keep the issue/PR, record the error in that entry's
+`assignment_error` in `03-triage.json`, and move on — never retry by
+dropping owners one at a time.
+
+In report-only mode, record `owners` as the would-be assignees and do not
+call GitHub to check them.
 
 ### Step 7.5 — Attempt a bug fix (opt-in: `fix_bugs`, off by default)
 
@@ -328,7 +364,9 @@ If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
   the SIMPLE fixes onto it, push (to the local remote from Step 0, when
   running locally), and open a PR against the base branch
   chosen above (GitHub MCP first, `gh pr create` as fallback). Never merge
-  it.
+  it. Then assign it per "Assigning CODEOWNERS" in Step 7: run
+  `resolve_owners.py --github-repo <repo>` over the **source modules** the
+  fixed tests cover (one call, every path), not the test files.
 
 If Step 6 produced no fixes, there is nothing to open a PR for — say so and
 move on. An empty run is a normal outcome, not a failure.
@@ -352,7 +390,8 @@ already has the commit in `--live` mode):
   `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` for the body.
   The template's own warning banner and "Relates to #N" (never
   "Fixes"/"Closes") are load-bearing — do not paraphrase them away. Record
-  the real PR URL. **Never merge it** — same Rule 4 as every other PR this
+  the real PR URL, then assign it per "Assigning CODEOWNERS" in Step 7,
+  using the owners of the source file(s) the fix changed. **Never merge it** — same Rule 4 as every other PR this
   skill opens.
 - **Either mode:** comment on the issue Step 7 filed, linking back to this
   PR (the real URL in `--live` mode, the report-only equivalent
@@ -414,12 +453,19 @@ gitignored, not committed.
   "pr_planned": {
     "branch": "auto-fix/triage-a1b2c3d",
     "files_changed": ["tests/test_orders.py"],
-    "summary": "1 test import fix"
+    "summary": "1 test import fix",
+    "owners": ["@orders-dev"],
+    "assignees": null,
+    "reviewers": null,
+    "assignment_error": null
   },
   "issues_created": [
     { "url": null,
       "test": "test_apply_discount_premium_tier",
-      "owners": ["@payments-team"],
+      "owners": ["@alice", "@acme/payments"],
+      "assignees": null,
+      "mention_only": null,
+      "assignment_error": null,
       "reason": "suspected real bug in discount calculation",
       "report_only": true,
       "drafted_body": "... full issue body from the template ..." }
@@ -437,6 +483,12 @@ gitignored, not committed.
 human reading this file must be able to see exactly what would have
 happened.
 
+`owners` is always the raw CODEOWNERS result. `assignees`/`reviewers`/
+`mention_only` are what `resolve_owners.py --github-repo` returned and
+were applied — `null` in report-only mode, where GitHub is never asked
+(the drafted body still names `owners`). `assignment_error` is the
+follow-up assign call's error if it failed, otherwise `null`.
+
 `bug_fix_prs_created` is always `[]` unless `fix_bugs` was on for this run
 (see Step 7.5/8.5). Each entry:
 
@@ -448,6 +500,10 @@ happened.
   "file_changed": "src/pricing.py",
   "summary": "Changed premium tier discount rate from 0.10 to 0.15 to match docs/pricing.md",
   "tests_rerun": { "target_test": "passed", "full_suite": "passed" },
+  "owners": ["@alice", "@acme/payments"],
+  "assignees": null,
+  "reviewers": null,
+  "assignment_error": null,
   "report_only": true
 }
 ```
@@ -520,5 +576,5 @@ the rest issue-only, and record the cap in `caps_hit` — same pattern as the
   `fix_bugs`
 - `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
 - `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` — bug-fix PR body shape (Step 8.5, `fix_bugs` only)
-- `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file path → CODEOWNERS owner (or none)
+- `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file paths → CODEOWNERS owners (or none), and with `--github-repo`, who GitHub will accept as assignee/reviewer
 - `${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py` — local `--live` only: GitHub access, repo, remote and PR base (Step 0)

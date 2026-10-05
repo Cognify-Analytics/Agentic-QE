@@ -22,6 +22,7 @@ Title: [QA Pipeline] Fix: {short description of the fix} (relates to #{issue_num
 **Relates to:** #{issue_number}
 **Failing test this addresses:** {test_name} ({test_file})
 **File(s) changed:** {file_list}
+**Owners:** {@owner, @org/team, ...} (from CODEOWNERS -- omit this line if none)
 **Detected at:** {git_sha}
 
 **What changed and why**
