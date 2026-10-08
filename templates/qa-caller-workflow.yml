@@ -13,6 +13,8 @@
 #     skills and rules it drives. Mismatching them runs one version's workflow
 #     against another version's skills.
 #  3. `live` — start at false. See README "Set it up in a target repo".
+#  4. `clickup_branch_naming` — turn on ONLY if this repo's branch policy
+#     requires a ClickUp task ID (CU-<id>) in every branch name.
 # ────────────────────────────────────────────────────────────────────────────
 name: QA Pipeline
 on:
@@ -20,6 +22,14 @@ on:
     types: [opened, ready_for_review]
     paths-ignore: ['**/*.md', 'docs/**', '.github/**']
   workflow_dispatch:
+    inputs:
+      clickup_task_id:
+        description: >-
+          ClickUp task ID for the branches this run pushes (e.g. CU-86bbh0u96).
+          Only needed with clickup_branch_naming on, when running on a branch
+          with no CU-<id> in its name — such as the first run on main.
+        required: false
+        type: string
 
 jobs:
   qa:
@@ -66,3 +76,13 @@ jobs:
       # human review FIRST — see README. Safe to try with live: false, which
       # only reports what it would fix.
       # fix_bugs: true
+
+      # Opt-in, off by default. Turn on if this repo only allows branch names
+      # carrying a ClickUp task ID. Every branch the pipeline pushes then reuses
+      # the task ID of the branch it ran on — a run on bug/CU-101010-cache-loading
+      # pushes auto-fix/CU-101010-bugfix-issue-9, auto-fix/CU-101010-triage-<sha>,
+      # and so on, instead of auto-fix/bugfix-issue-9. If the branch has no CU-<id>,
+      # nothing is pushed (issues are still filed) unless you run it manually and
+      # fill in the clickup_task_id box. Leave off if your repo has no such rule.
+      # clickup_branch_naming: true
+      clickup_task_id: ${{ inputs.clickup_task_id }}

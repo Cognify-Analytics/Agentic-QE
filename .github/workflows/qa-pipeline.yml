@@ -25,6 +25,25 @@ on:
         required: false
         type: boolean
         default: false
+      clickup_branch_naming:
+        description: >-
+          Opt-in, off by default. For repos whose branch policy requires a ClickUp task
+          ID. Every branch the pipeline pushes then carries the task ID of the branch
+          that triggered the run: a run on bug/CU-101010-cache-loading pushes
+          auto-fix/CU-101010-triage-<sha>, auto-fix/CU-101010-bugfix-issue-<n> and
+          auto-fix/CU-101010-qa-baseline-<sha>. If no task ID can be found, the run
+          pushes no branch at all (issues are still filed). See scripts/branch_names.py.
+        required: false
+        type: boolean
+        default: false
+      clickup_task_id:
+        description: >-
+          Only used with clickup_branch_naming, and only when the triggering branch has
+          no CU-<id> in its name (typically a workflow_dispatch on the default branch).
+          With or without the "CU-" prefix.
+        required: false
+        type: string
+        default: ''
       plugin_ref:
         description: Agentic-QE tag/ref to pin the plugin checkout to.
         required: false
@@ -134,9 +153,25 @@ jobs:
         id: plan
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
+          # Via env, never inlined into the script: a branch name is user-controlled text.
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          CLICKUP: ${{ inputs.clickup_branch_naming }}
+          CLICKUP_TASK_ID: ${{ inputs.clickup_task_id }}
         run: |
           set -euo pipefail
           mkdir -p .claude-pipeline
+          SHA=$(git rev-parse --short HEAD)
+
+          # Every branch name the pipeline will push, decided once, here, by the same
+          # script a local run uses — the skills read them from run.json.
+          CLICKUP_FLAG=()
+          [ "$CLICKUP" = true ] && CLICKUP_FLAG=(--clickup)
+          BRANCH_NAMING=$(python .agentic-qe/scripts/branch_names.py \
+            --branch "$HEAD_BRANCH" --sha "$SHA" --task-id "$CLICKUP_TASK_ID" "${CLICKUP_FLAG[@]}")
+          NAMING_PROBLEM=$(jq -r '.problem // empty' <<<"$BRANCH_NAMING")
+          if [ -n "$NAMING_PROBLEM" ]; then
+            echo "::warning title=Agentic QE branch naming::${NAMING_PROBLEM}. Issues are still filed; fix PRs are only reported."
+          fi
 
           # A usable .qa/ baseline is what makes an incremental run possible at all.
           HAVE_BASELINE=false
@@ -190,8 +225,8 @@ jobs:
           fi
 
           jq -n \
-            --arg sha "$(git rev-parse --short HEAD)" \
-            --arg branch "${{ github.head_ref || github.ref_name }}" \
+            --arg sha "$SHA" \
+            --arg branch "$HEAD_BRANCH" \
             --arg ts "$(date -u +%FT%TZ)" \
             --arg strategy "$STRATEGY" \
             --argjson targets "$TARGETS" \
@@ -199,8 +234,10 @@ jobs:
             --argjson live "${{ inputs.live && 'true' || 'false' }}" \
             --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
             --argjson ctx_changed "$CTX_INPUTS_CHANGED" \
+            --argjson branch_naming "$BRANCH_NAMING" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
             { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
+              branch_naming:$branch_naming,
               ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
                     strategy:$strategy, targets:$targets,
                     context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
@@ -403,7 +440,17 @@ jobs:
           # first-run bootstrap is a workflow_dispatch, which runs against exactly
           # that — so this case gets its own branch and a PR instead of being dropped.
           if [ -z "${HEAD_BRANCH}" ] || [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
-            QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            # Named by scripts/branch_names.py in the plan step. Null means ClickUp
+            # naming is on but there was no task ID: a branch outside the naming
+            # policy is worse than no branch, so keep the record in the artifact only.
+            QA_BRANCH=$(jq -r '.branch_naming.branches.qa_baseline // empty' .claude-pipeline/run.json 2>/dev/null || true)
+            if [ -z "${QA_BRANCH}" ]; then
+              if [ "$(jq -r '.branch_naming.clickup // false' .claude-pipeline/run.json 2>/dev/null)" = true ]; then
+                echo "::warning::ClickUp branch naming is on but no task ID was found, so the .qa/ baseline was not pushed. Re-run with the clickup_task_id input set. The record is in the run artifact only."
+                exit 0
+              fi
+              QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            fi
             if git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
               cat > qa-baseline-pr.md <<EOF
           Adds the Agentic QE baseline and run record for \`${SHA}\`. Only \`.qa/\` is

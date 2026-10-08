@@ -27,6 +27,7 @@ for the CI design.
 |---|---|
 | *(none)* | Report-only. Every issue and PR is drafted in `.claude-pipeline/03-triage.json`, and nothing reaches GitHub |
 | `--live` | Actually file issues and open PRs (see [Filing issues and PRs from your machine](#filing-issues-and-prs-from-your-machine)) |
+| `--clickup-branches` | Opt-in. Names every branch the pipeline pushes after your branch's ClickUp task ID (see [ClickUp branch naming](#clickup-branch-naming--opt-in)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
 
 ## Install
@@ -295,6 +296,92 @@ turning it on for real. Make sure branch protection with required human
 review is in place first — a bug-fix PR changes production code, not just
 tests.
 
+### ClickUp branch naming — opt-in
+
+Some repos only allow branch names that carry a ClickUp task ID, such as
+`feature/CU-86bbh0u96-common-rules-implementation`. The pipeline's own
+branches (`auto-fix/triage-a1b2c3d` and so on) don't, so it can't push
+them there. Turn this option on and the pipeline names its branches after
+**the task ID of the branch it is running on**. It reuses that ID, so
+nobody has to create a new ClickUp task.
+
+#### Turning it on
+
+In the target repo's `.github/workflows/qa.yml`:
+
+```yaml
+    with:
+      clickup_branch_naming: true
+```
+
+For a local run, pass `--clickup-branches` instead
+(`/agentic-qe:test-pipeline --live --clickup-branches`).
+
+Leave it off if your repo has no naming rule. Nothing changes then.
+
+#### Where the task ID comes from
+
+You normally don't type it anywhere. The pipeline looks in two places, in
+this order:
+
+1. **The branch name.** It takes the first `CU-<letters and digits>` part,
+   so `bug/CU-101010-cache-loading` gives `101010`. Lowercase `cu-` works
+   too.
+2. **The `clickup_task_id` box.** It's only checked when the branch name
+   has no ID. The box only appears when you start a run by hand
+   (**Actions → QA Pipeline → Run workflow**), and accepts `CU-86bbh0u96`
+   or just `86bbh0u96`.
+
+On pull requests the box doesn't exist, and the developer's branch already
+carries the ID, so it is always automatic.
+
+#### What happens in each case
+
+**Option off.** The box is ignored. Branches get the default names, and
+everything works as before.
+
+**Option on, ID found.** Everything works as normal, only the branch names
+change. A run on `bug/CU-101010-cache-loading` pushes:
+
+| Branch for | Option off | Option on |
+|---|---|---|
+| Test fixes | `auto-fix/triage-a1b2c3d` | `auto-fix/CU-101010-triage-a1b2c3d` |
+| Each bug fix (`fix_bugs`) | `auto-fix/bugfix-issue-9` | `auto-fix/CU-101010-bugfix-issue-9` |
+| `.qa/` baseline (manual run on `main`) | `agentic-qe/qa-baseline-a1b2c3d` | `auto-fix/CU-101010-qa-baseline-a1b2c3d` |
+
+**Option on, no ID found.** For example, a manual run on `main` with the
+box left empty. Any branch the pipeline created would break the naming
+rule, so it creates **no new branches**. The rest of the run still
+happens:
+
+| Part of the run | Happens? |
+|---|---|
+| Tests generated, run, and failures classified | ✅ Yes |
+| GitHub issues filed for suspected bugs | ✅ Yes (an issue needs no branch) |
+| Test fixes worked out and checked | ✅ Yes, but not committed or pushed |
+| Test-fix PR and bug-fix PRs | ❌ Not opened. The run summary describes what they would contain |
+| `.qa/` baseline branch and PR | ❌ Not pushed. The `.qa/` results are in the run's downloadable artifact |
+| A warning on the job explaining why | ✅ Yes |
+
+To get the branches and PRs, run it again by hand with the task ID in the
+box. Locally there's no fallback: a `--live --clickup-branches` run on a
+branch without an ID stops before it starts, and asks you to switch to a
+branch named after its task.
+
+#### Good to know
+
+- **On pull requests this almost never comes up.** The developer's branch
+  already follows the policy. The no-ID case is mostly the first manual
+  run on `main`, so remember the box for that one.
+- **If both have an ID, the branch name wins.** The box is only a
+  fallback.
+- **`.qa/` on a pull request is unaffected.** The workflow commits it onto
+  the developer's own existing branch, which isn't a new branch, so the
+  naming rule doesn't apply.
+- All the naming logic lives in `scripts/branch_names.py`. To see what a
+  branch name would produce, run
+  `python scripts/branch_names.py --branch bug/CU-101010-cache-loading --sha a1b2c3d --clickup`.
+
 ## Where a run gets recorded
 
 A run writes the same `.qa/` output whether it runs locally or in CI — what
@@ -311,7 +398,7 @@ in a dedicated "Record the run in `.qa/`" step:
 | Trigger | Where `.qa/` lands |
 |---|---|
 | `pull_request` | Committed straight onto the PR's own head branch, so the record travels with the PR and reaches your default branch when you merge it |
-| `workflow_dispatch` on the default branch | Pushed to `agentic-qe/qa-baseline-<sha>` with a PR opened — the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
+| `workflow_dispatch` on the default branch | Pushed to `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)) with a PR opened — the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
 
 This happens in **report-only mode too**. Report-only means no issues are
 filed and none of your code is touched; it does not mean the pipeline
@@ -389,6 +476,7 @@ cheaper.
   - `parse_coverage.py` — turns a Cobertura `coverage.xml` into the coverage JSON `.qa/test-inventory.json` uses
   - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
+  - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
 - `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
