@@ -257,26 +257,147 @@ The pipeline never pushes to or merges into a default branch.
 
 ### Set it up in a target repo
 
-1. In the target repo, add these secrets: `ANTHROPIC_API_KEY` (an
-   Anthropic API key), and — while this repo is private —
-   `AGENTIC_QE_READ_TOKEN` (a token with read access to it).
-2. Copy [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
-   into the target repo as `.github/workflows/qa.yml`, and adjust
-   `setup_script` to install that repo's dependencies and test framework.
-   Set `plugin_ref` to the same ref you call the workflow at — the job
-   warns if the two drift apart.
-3. Turn on branch protection on the target repo's default branch before
-   setting `live: true` for real — the reusable workflow can open PRs and
-   file issues, and branch protection is what keeps a human in the loop for
-   merges. Specifically require **at least one human approval** before
-   merge, not just "require a pull request" — the pipeline's own "never
-   merge" rule is necessary but not sufficient on its own; this is what
-   actually enforces it at the GitHub level.
-4. Trigger a first run with `workflow_dispatch` before relying on the
-   `pull_request` trigger, so a whole-repo bootstrap run happens once,
-   deliberately, rather than on someone's first PR.
+Everything below is done in your web browser on github.com, and you only
+do it once per repo. It takes about 15 minutes.
 
-Draft PRs, PRs from forks, and PRs labelled `qa:skip` are skipped.
+The **target repo** is the repo you want the pipeline to test, not this
+one.
+
+**What you need first**
+
+- **Admin access to the target repo.** You'll know you have it if you can
+  see a **Settings** tab at the top of the repo's page. If you can't, ask
+  whoever manages that repo.
+- **A login for the Anthropic Console** (<https://console.anthropic.com>),
+  which is where the API key comes from. Ask your team lead if you don't
+  have one.
+- **A developer on the target repo** who can spare 5 minutes for step 4.
+
+#### Step 1 — Allow other repos to use this pipeline (once per org)
+
+Skip this if someone has already done it. If unsure, ask, or just do it
+again; it does no harm. It needs admin access to **Agentic-QE** (this
+repo), not the target repo.
+
+1. Open <https://github.com/Cognify-Analytics/Agentic-QE>.
+2. Click **Settings → Actions → General**.
+3. Scroll down to **Access**.
+4. Choose **Accessible from repositories in the 'Cognify-Analytics'
+   organization**.
+5. Click **Save**.
+
+#### Step 2 — Get an Anthropic API key
+
+This is what lets the pipeline use Claude. Usage is billed to your
+organization's Anthropic account.
+
+1. Go to <https://console.anthropic.com> and log in.
+2. Open **API Keys** and click **Create Key**.
+3. Name it after the target repo, e.g. `agentic-qe-orders-service`.
+4. **Copy the key now and paste it somewhere safe for a few minutes.**
+   It's shown only once.
+
+#### Step 3 — Create a GitHub token that can read this repo
+
+The pipeline needs to download Agentic-QE, which is private, so it needs a
+token that is allowed to read it.
+
+1. On GitHub, click your profile picture (top right) → **Settings**.
+2. In the left menu, scroll to the bottom: **Developer settings →
+   Personal access tokens → Fine-grained tokens**.
+3. Click **Generate new token** and fill in:
+   - **Token name:** `agentic-qe-read`
+   - **Expiration:** the longest your org allows. Put a reminder in your
+     calendar, because the pipeline stops working when the token expires.
+   - **Resource owner:** **Cognify-Analytics**
+   - **Repository access:** **Only select repositories** → pick
+     **Agentic-QE**
+   - **Permissions → Repository permissions → Contents:** **Read-only**
+4. Click **Generate token**, then **copy it straight away**. Like the API
+   key, it's shown only once.
+
+If GitHub says the token is "pending approval", an org admin has to
+approve it before it works.
+
+#### Step 4 — Save both as secrets in the target repo
+
+Secrets are GitHub's safe place for passwords. Once saved, nobody can read
+them back, not even you.
+
+1. Open the **target repo** on GitHub.
+2. Click **Settings → Secrets and variables → Actions**.
+3. Click **New repository secret** and add the first one:
+   - **Name:** `ANTHROPIC_API_KEY`
+   - **Secret:** the key from step 2
+4. Click **Add secret**. Then click **New repository secret** again for the
+   second one:
+   - **Name:** `AGENTIC_QE_READ_TOKEN`
+   - **Secret:** the token from step 3
+5. Click **Add secret**. Both names should now be listed.
+
+The names must be typed **exactly** as shown, in capitals, with
+underscores. Then delete the copies you pasted somewhere in steps 2 and 3.
+
+#### Step 5 — Add the pipeline file to the target repo
+
+1. Open [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
+   in this repo and copy all of its contents. The **Copy raw file** button
+   at the top right of the file does this in one click.
+2. In the target repo, click **Add file → Create new file**.
+3. In the file name box, type exactly `.github/workflows/qa.yml`. The
+   slashes create the folders for you.
+4. Paste the contents.
+5. **Ask a developer on that repo to edit the `setup_script` part.** It's
+   the list of commands that install the repo's software, it's different
+   for every repo, and getting it wrong is the most common reason a first
+   run fails. Leave everything else as it is. In particular, keep
+   `live: false` for now, so the pipeline only reports and doesn't file
+   anything yet.
+6. Click **Commit changes**. If GitHub asks, choose to create a new branch
+   and open a pull request, then get it approved and merged as usual.
+
+#### Step 6 — Protect the main branch
+
+The pipeline can open pull requests. This step makes sure a person always
+has to approve one before it's merged, so nothing the pipeline writes
+reaches `main` unseen.
+
+1. In the target repo, click **Settings → Branches**.
+2. Click **Add classic branch protection rule**.
+3. **Branch name pattern:** `main` (or whatever the repo's main branch is
+   called).
+4. Tick **Require a pull request before merging**, then tick **Require
+   approvals** underneath it and leave the number at **1**.
+5. Click **Create** at the bottom.
+
+If the repo already has a rule for `main` that requires at least one
+approval, you're already covered.
+
+#### Step 7 — Run it for the first time
+
+The first run tests the whole repo, so start it on purpose rather than
+letting it happen on someone's first pull request.
+
+1. In the target repo, click the **Actions** tab.
+2. In the left list, click **QA Pipeline**.
+3. Click **Run workflow** (on the right), leave the branch as `main`, and
+   click the green **Run workflow** button. If your repo uses
+   [ClickUp branch naming](#clickup-branch-naming--opt-in), type a
+   ClickUp task ID in the box first.
+4. Wait for it to finish. Large repos can take up to an hour. A green tick
+   means it worked.
+5. It opens a pull request named **"Agentic QE: record run …"**. Merge it.
+   That saves the results, so later runs only test what changed.
+
+From now on it runs by itself on every new pull request. Draft pull
+requests, pull requests from forks, and pull requests labelled `qa:skip`
+are skipped.
+
+#### Step 8 — Later: let it file issues and PRs
+
+After watching a few runs and being happy with what it reports, change
+`live: false` to `live: true` in `.github/workflows/qa.yml`. From then on
+it files real GitHub issues and opens real pull requests.
 
 ### `fix_bugs` — opt-in bug-fix PRs
 
