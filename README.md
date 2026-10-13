@@ -390,15 +390,109 @@ letting it happen on someone's first pull request.
 5. It opens a pull request named **"Agentic QE: record run …"**. Merge it.
    That saves the results, so later runs only test what changed.
 
-From now on it runs by itself on every new pull request. Draft pull
-requests, pull requests from forks, and pull requests labelled `qa:skip`
-are skipped.
+From now on it runs by itself when a pull request is opened or marked
+ready for review. Pushing more commits to an open pull request doesn't
+start it again. Draft pull requests, pull requests from forks, pull
+requests labelled `qa:skip`, and pull requests that only touch docs or
+`.github/` are skipped. See [When it runs, and on which
+branch](#when-it-runs-and-on-which-branch) for the full rules.
 
 #### Step 8 — Later: let it file issues and PRs
 
 After watching a few runs and being happy with what it reports, change
 `live: false` to `live: true` in `.github/workflows/qa.yml`. From then on
 it files real GitHub issues and opens real pull requests.
+
+### When it runs, and on which branch
+
+Two workflow files are involved, and they do different jobs:
+
+| File | Lives in | Decides |
+|---|---|---|
+| `.github/workflows/qa.yml` (copied from [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)) | The target repo | **When** to run, plus that repo's settings (`setup_script`, `live`, `clickup_branch_naming`, …) |
+| `.github/workflows/qa-pipeline.yml` | This repo | **What** happens. It never runs by itself, only when a `qa.yml` calls it |
+
+#### What starts a run
+
+The caller only listens to these events:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+    paths-ignore: ['**/*.md', 'docs/**', '.github/**']
+  workflow_dispatch:
+```
+
+| You do this | Runs? |
+|---|---|
+| Create a branch and push it, without opening a PR | ❌ No. A push isn't a trigger |
+| Open a pull request | ✅ Yes. It doesn't matter whether the branch is new or old |
+| Open a **draft** pull request | ❌ Skipped |
+| Click **Ready for review** on a draft | ✅ Yes |
+| **Push more commits to an open pull request** | ❌ **No** |
+| Close and reopen a pull request | ❌ No |
+| Open a pull request that **only** changes `*.md`, `docs/` or `.github/` files | ❌ No, and no check appears on the PR at all |
+| Open a pull request from a fork, or one labelled `qa:skip` | ❌ Skipped |
+| **Actions → QA Pipeline → Run workflow** | ✅ Yes, on the branch you pick |
+
+To test new commits on a pull request that is already open, either click
+**Run workflow** on its branch, or click **Convert to draft** and then
+**Ready for review** again. **Re-run jobs** on an old run doesn't work for
+this, because it re-tests the commit that run used.
+
+**Why did another check run but not QA?** Other workflows in the repo have
+their own triggers. For example, a branch-name check that listens to
+`opened, synchronize, reopened, edited` with no path filter runs on every
+PR. QA doesn't run when every changed file matches `paths-ignore`. A PR
+that only adds `.github/CODEOWNERS` and a workflow file shows the
+branch-name check and nothing from QA. That's expected, because there's
+no code to test. This includes the PR that adds `qa.yml` itself.
+
+#### Which branch is used for what
+
+In a pull request, **head** is the branch being merged in and **base** is
+the branch it merges into. For example, take a PR from
+`feature/CU-86bbh0u96-common-rules-implementation` (head) into
+`feature/CU-86bbea67d-branch-naming` (base):
+
+| Question | Answer | In the example |
+|---|---|---|
+| Whose code is tested? | **Head.** The workflow checks out the PR's head commit | `feature/CU-86bbh0u96-…` |
+| What is the base used for? | Only to work out what changed (`git diff base...head`), which decides `incremental` vs `triage-only` | `feature/CU-86bbea67d-…` |
+| Whose `qa.yml` is used? | GitHub reads it from the PR's merge commit (base and head combined). That's head's version if the PR edits `qa.yml`, otherwise base's. If neither branch has it, nothing runs | Base's, since the PR doesn't change it |
+| Which pipeline version runs? | **Neither branch's.** It's this repo, at the ref in `qa.yml`'s `uses:` and `plugin_ref` | Whatever `uses:` names |
+| Whose ClickUp task ID goes into new branch names? | **Head's** | `CU-86bbh0u96` |
+| Where do auto-fix PRs point? | **Into the head branch**, never the base or the default branch | `auto-fix/CU-86bbh0u96-triage-<sha>` → `feature/CU-86bbh0u96-…` |
+| Where is `.qa/` committed? | Straight onto the head branch. It reaches the base when the PR is merged | `feature/CU-86bbh0u96-…` |
+
+So the chain looks like this:
+
+```
+auto-fix/CU-86bbh0u96-triage-<sha> ──PR──► feature/CU-86bbh0u96-… ──your PR──► feature/CU-86bbea67d-…
+```
+
+The workflow's own commits never start another run. Pushes made with the
+workflow's `GITHUB_TOKEN` don't trigger workflows, and new commits on a PR
+aren't a trigger anyway.
+
+#### What a run decides to do
+
+Before Claude starts, the workflow picks a strategy:
+
+| Strategy | When |
+|---|---|
+| `bootstrap` | The head branch has no usable `.qa/` baseline. The whole repo is tested |
+| `incremental` | There's a baseline, and the PR changes source files (outside test folders). Only those files are targeted |
+| `triage-only` | There's a baseline, but no source files changed. Nothing new is generated; existing tests are run and triaged |
+
+A branch only has the baseline if it was created, or rebased, after the
+"Agentic QE: record run …" PR was merged.
+
+A **manual run** has no base to compare against. With no baseline it
+bootstraps, which is what you want for the first run (Step 7). With a
+baseline it always comes out as `triage-only`, so it won't write tests for
+new code. Open a PR for that.
 
 ### `fix_bugs` — opt-in bug-fix PRs
 
