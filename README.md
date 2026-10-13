@@ -198,6 +198,7 @@ those files off your "please commit" list.
 | `.qa/` committed | By you | By the workflow |
 | Sticky summary comment on the PR | — | ✅ |
 | Cost telemetry | — | ✅ |
+| Step-by-step timeline of what the agent did | — | ✅ |
 | "No production source changed" assertion | — | ✅ (fails the job) |
 
 ### Who gets assigned
@@ -587,6 +588,41 @@ volume-bound rather than price-bound. Note also that `max_turns` is a
 ceiling that stops a runaway run; lowering it does not make a normal run
 cheaper.
 
+## Seeing what the agent did
+
+The job log shows the run as raw JSON, one blob per message, which is no
+way to follow it. Under the cost table, the job summary also has a
+section called **"Agentic QE — what the agent did"**:
+
+- **How the run ended**: finished, or stopped at the turn limit, with
+  turns and wall-clock time.
+- **Each stage's outcome**: ran, skipped (and why), or not reached, with
+  its time, step count, and how many of its steps were blocked or failed.
+- **Skipped, and why**: stages the pipeline skipped, modules
+  `/generate-tests` wrote no tests for, tests it discarded, and fixes
+  `/triage-tests` gave up on.
+- **Decisions**: the tests written, the tests kept failing on purpose as
+  possible bugs, how each failure was classified and why, and the fixes
+  made.
+- **Blocked or failed actions**: tool calls that were denied or errored.
+  These are often harmless, because the agent tries something, sees it
+  fail, and adapts. They are still the first place to look when a run
+  goes wrong.
+- **Step by step**: one collapsed timeline per stage, showing every file
+  read, command run, and file written, with timestamps. Between the
+  steps is the agent's own commentary on what it's doing and why.
+
+The full version, with untruncated commentary, command output, and each
+stage's closing report, is `trace.md` in the `qa-pipeline-<run_id>`
+artifact, next to the raw `execution-log.json` it is built from.
+`scripts/render_trace.py` builds both versions. It also renders a local
+headless run:
+
+```
+claude -p '/agentic-qe:test-pipeline' --output-format stream-json --verbose > run.jsonl
+python scripts/render_trace.py run.jsonl --out trace.md
+```
+
 ## Project layout
 
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
@@ -598,6 +634,7 @@ cheaper.
   - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
   - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
+  - `render_trace.py` — turns a run's execution log into the readable "what the agent did" timeline
 - `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 

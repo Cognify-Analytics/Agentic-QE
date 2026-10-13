@@ -361,6 +361,23 @@ jobs:
           echo "::notice title=Agentic QE cost::\$$COST over $TURNS turns (strategy: $STRAT)"
           exit 0
 
+      # The readable half of the execution log: what the agent did stage by stage,
+      # what it skipped and why, and where it got blocked. The full version goes in
+      # the run artifact as trace.md. Like telemetry, this never fails the job.
+      - name: Summarize what the agent did
+        if: always() && steps.claude.outcome != '' && steps.claude.outcome != 'skipped'
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          if [ -z "${EXEC_FILE:-}" ] || [ ! -f "$EXEC_FILE" ]; then
+            echo "The Claude step left no execution log, so there is no timeline to show."
+            exit 0
+          fi
+          python .agentic-qe/scripts/render_trace.py "$EXEC_FILE" \
+            --pipeline-dir .claude-pipeline \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --out .claude-pipeline/trace.md || true
+
       - name: Assert no production source was changed
         id: assert
         if: always()
