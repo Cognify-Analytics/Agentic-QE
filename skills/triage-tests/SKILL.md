@@ -25,6 +25,9 @@ off by default, unrelated to `--live` (it works in either mode: report-only
 file; `--live --fix-bugs` actually applies it). See Ground rule 1 below and
 PRD Section 9.1 before turning this on.
 
+Pass `--clickup-branches` for a repo whose branch policy requires a ClickUp
+task ID in every branch name — see "Branch names" below.
+
 When invoked by `/test-pipeline` rather than directly, mode comes from
 `.claude-pipeline/run.json`'s `"live"` and `"fix_bugs"` fields instead of
 `$ARGUMENTS` (the orchestrator writes that file before invoking any stage,
@@ -84,6 +87,36 @@ means these values: `repo`, `remote`, `pr_base_branch`, `start_branch`.
 Pass `--repo <repo>` on every `gh issue`/`gh pr` command in a local live
 run, so `gh` never has to guess between several remotes, and push only to
 `<remote>`.
+
+### Branch names — never make one up
+
+Every branch this skill creates is named by
+`${CLAUDE_PLUGIN_ROOT}/scripts/branch_names.py`, so CI, local runs and the
+workflow's own `.qa/` branch all follow one rule. Read the names from
+`run.json`'s `branch_naming` object (the CI workflow and `/test-pipeline`
+both write it). If it's missing — you were invoked directly — run
+`python ${CLAUDE_PLUGIN_ROOT}/scripts/branch_names.py --branch <current branch> --sha <short sha>`
+yourself, adding `--clickup` if `--clickup-branches` was passed, and use
+its output the same way.
+
+- `branches.triage` — the one branch for this run's SIMPLE fixes (Step 6).
+- `branches.bugfix` — a template for each bug fix (Step 7.5): replace
+  `{issue_number}` with the issue's number.
+
+With ClickUp naming on, these carry the task ID of the branch the run
+started from — `bug/CU-101010-cache-loading` gives
+`auto-fix/CU-101010-triage-<sha>` and `auto-fix/CU-101010-bugfix-issue-9`.
+Use them exactly as given; never shorten, re-case or reword them.
+
+**If `branch_naming.clickup` is true and `branches` is null**, no task ID
+could be found, and any branch pushed would break the repo's naming policy.
+Then **push no branch at all**: run Steps 6 through 8.5 as if in
+report-only mode — Step 6 fixes and verifies in the working tree without
+creating a branch, and nothing is committed, pushed or opened as a PR —
+even in `--live` mode. Step 7's issues are still filed in `--live` mode;
+they need no branch. Copy `branch_naming.problem` into `03-triage.json`'s
+`branch_naming_problem` and say it on screen, so nobody wonders why a live
+run opened no PR.
 
 ### Step 1 — Read the context
 
@@ -185,8 +218,9 @@ provenance check that decided it).
 
 For each SIMPLE failure:
 
-1. Create a branch `auto-fix/triage-<sha>` if one doesn't already exist for
-   this run (all SIMPLE fixes in a run share one branch).
+1. Create the branch named `branches.triage` (see "Branch names") if it
+   doesn't already exist for this run — all SIMPLE fixes in a run share
+   one branch.
 2. Make the smallest possible fix **to the test file** — never to production
    source. This is fixing a mistake in how the test was written (a typo,
    a wrong import, a wrong fixture keyword), not re-deriving what the test
@@ -302,8 +336,9 @@ reason why in `bug_fix_prs_created` (that array is only for attempts, not
 every failure considered).
 
 **If eligible, attempt the fix:**
-1. Create a branch `auto-fix/bugfix-issue-<issue_number>` off the same
-   base Step 8 will use, if one doesn't already exist for this issue.
+1. Create the branch named by `branches.bugfix`, with this issue's number
+   filled in (see "Branch names"), off the same base Step 8 will use, if
+   one doesn't already exist for this issue.
 2. Make the smallest possible change to production source that makes the
    documented/expected behavior true — scoped to the file(s) the failure's
    stack trace directly implicates. **Never edit the failing test itself
@@ -356,7 +391,7 @@ section, which runs *after* this stage, so it does not exist yet at this
 point in the run. Committing `.qa/` from here would silently miss the run
 record every time, and would now also duplicate what the workflow commits.
 
-If Step 6 produced any commits on the `auto-fix/triage-<sha>` branch:
+If Step 6 produced any commits on the `branches.triage` branch:
 - **Report-only mode:** note in `03-triage.json` and on screen what PR
   *would* be opened (branch, files changed, one-line summary per fix),
   marked `[REPORT-ONLY — not opened]`. Do not push the branch.
@@ -378,8 +413,8 @@ verified fix this run.** This PR is always separate from Step 8's — a
 production-code change and a test typo fix carry different review burdens,
 and a reviewer must be able to accept one without the other.
 
-For each fix Step 7.5 verified (branch `auto-fix/bugfix-issue-<issue_number>`
-already has the commit in `--live` mode):
+For each fix Step 7.5 verified (its `branches.bugfix` branch already has
+the commit in `--live` mode):
 
 - **Report-only mode:** note in `03-triage.json` and on screen what PR
   *would* be opened (branch, file(s) changed, the issue it relates to, the
@@ -400,10 +435,11 @@ already has the commit in `--live` mode):
 
 ### Step 8.9 — Local `--live` runs: put the developer back
 
-**Skip in CI** (the runner is thrown away) **and in report-only mode**
-(nothing was committed, so there is nothing to step away from).
+**Skip in CI** (the runner is thrown away), **in report-only mode**, and
+when "Branch names" blocked every branch (nothing was committed, so there
+is nothing to step away from).
 
-Steps 6 and 7.5 checked out `auto-fix/...` branches. On a CI runner that
+Steps 6 and 7.5 checked out the pipeline's own fix branches. On a CI runner that
 doesn't matter; on a developer's machine it would leave them on a bot
 branch. Once every push and PR above is done, run
 `git checkout <start_branch>` (from Step 0). Uncommitted work — `.qa/`, and
@@ -472,6 +508,7 @@ gitignored, not committed.
   ],
   "issues_commented": [],
   "bug_fix_prs_created": [],
+  "branch_naming_problem": null,
   "escalated": [],
   "caps_hit": []
 }
@@ -488,6 +525,10 @@ happened.
 were applied — `null` in report-only mode, where GitHub is never asked
 (the drafted body still names `owners`). `assignment_error` is the
 follow-up assign call's error if it failed, otherwise `null`.
+
+`branch_naming_problem` is `null` unless ClickUp branch naming blocked every
+branch this run (see "Branch names") — then it holds the reason, and
+`pr_url` and every bug-fix `pr_url` are `null` even in `"live"` mode.
 
 `bug_fix_prs_created` is always `[]` unless `fix_bugs` was on for this run
 (see Step 7.5/8.5). Each entry:
@@ -577,4 +618,5 @@ the rest issue-only, and record the cap in `caps_hit` — same pattern as the
 - `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md` — issue body shape
 - `${CLAUDE_PLUGIN_ROOT}/templates/bug-fix-pr-template.md` — bug-fix PR body shape (Step 8.5, `fix_bugs` only)
 - `${CLAUDE_PLUGIN_ROOT}/scripts/resolve_owners.py` — file paths → CODEOWNERS owners (or none), and with `--github-repo`, who GitHub will accept as assignee/reviewer
+- `${CLAUDE_PLUGIN_ROOT}/scripts/branch_names.py` — the name of every branch this skill creates, including ClickUp task-ID naming
 - `${CLAUDE_PLUGIN_ROOT}/scripts/gh_preflight.py` — local `--live` only: GitHub access, repo, remote and PR base (Step 0)

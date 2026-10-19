@@ -15,7 +15,10 @@ in the developer's main session so they can watch each stage happen.
 in live mode (real branches/PRs/issues) instead of the default report-only.
 Pass `--fix-bugs` to also turn on `/triage-tests`' opt-in bug-fix mode
 (off by default — see its Step 7.5/8.5 and PRD Section 9.1); this works
-independently of `--live` per that skill's own rules. Anything else in
+independently of `--live` per that skill's own rules. Pass
+`--clickup-branches` for a repo whose branch policy requires a ClickUp task
+ID in every branch name: the branches `/triage-tests` pushes then reuse
+the task ID of the branch you're on (see step 5 below). Anything else in
 `$ARGUMENTS` is forwarded to `/generate-tests` as its target (a file or
 folder) — with no target, it scans the whole repo per its own Step 5
 ranking.
@@ -68,6 +71,17 @@ single-session behavior, just non-interactive.
    `.claude-pipeline/run.json` yourself now (schema below) — **before
    invoking any stage**, since that's how `/generate-tests` knows to skip
    its approval prompt and how `/triage-tests` knows whether to run live.
+
+   For a local run, also decide branch names now. Run
+   `python ${CLAUDE_PLUGIN_ROOT}/scripts/branch_names.py --branch <branch> --sha <sha>`
+   — adding `--clickup` if `--clickup-branches` was passed — and store its
+   whole output as `run.json`'s `"branch_naming"`. `/triage-tests` takes
+   every branch name from there. If ClickUp naming is on and the output
+   has a `problem` (your branch has no `CU-<id>` in its name) **and this is
+   a `--live` run, stop before writing anything else**: show the problem
+   and say to run from a branch named after its ClickUp task, or drop
+   `--clickup-branches`. CI carries on without pushing branches in this
+   case, because nobody is there to ask; locally, you are.
 6. **Skip this step entirely in CI mode** (i.e. when `run.json`'s `"mode"`
    is `"ci"`) — the workflow already keeps `.claude-pipeline/` out of the
    diff via `.git/info/exclude`, and appending to a tracked `.gitignore` on
@@ -91,9 +105,29 @@ single-session behavior, just non-interactive.
   "timestamp": "2026-08-21T14:02:00Z",
   "mode": "pipeline",
   "live": false,
-  "fix_bugs": false
+  "fix_bugs": false,
+  "branch_naming": {
+    "clickup": false,
+    "task_id": null,
+    "task_id_source": null,
+    "branches": {
+      "triage": "auto-fix/triage-a1b2c3d",
+      "bugfix": "auto-fix/bugfix-issue-{issue_number}",
+      "qa_baseline": "agentic-qe/qa-baseline-a1b2c3d"
+    },
+    "problem": null
+  }
 }
 ```
+
+`branch_naming` is exactly what `scripts/branch_names.py` printed — in CI
+the workflow writes it, from its `clickup_branch_naming` and
+`clickup_task_id` inputs. With ClickUp naming on and a run on
+`bug/CU-101010-cache-loading`, it reads `"clickup": true`,
+`"task_id": "101010"` and branches like
+`auto-fix/CU-101010-bugfix-issue-{issue_number}`. When no task ID could be
+found, `branches` is `null` and `problem` says why — `/triage-tests` then
+pushes no branch (see its "Branch names" section).
 
 **Local `--live` run** — the same, plus the `"local"` object from step 2's
 preflight. It is the local stand-in for the CI schema's `ci` block:
@@ -110,6 +144,7 @@ finished pushing fix branches.
   "mode": "pipeline",
   "live": true,
   "fix_bugs": false,
+  "branch_naming": { "...": "as above" },
   "local": {
     "repo": "org/repo",
     "remote": "origin",
@@ -132,6 +167,7 @@ before this skill is invoked — see this repo's
   "mode": "ci",
   "live": true,
   "fix_bugs": false,
+  "branch_naming": { "...": "as above" },
   "ci": {
     "pr_number": 42,
     "pr_base_branch": "feature/refunds",
@@ -344,6 +380,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 {totals from 03-triage.json: passed/failed, SIMPLE fixed count, COMPLEX/AMBIGUOUS count}
 
 ## Needs a human
+{if 03-triage.json has a branch_naming_problem: say first, in one line, that no fix branch or PR was pushed because of it, and quote it}
 {one line per issue in issues_created/issues_commented, report-only or real URL}
 {one line per entry in bug_fix_prs_created, flagged distinctly — e.g. "Bug-fix PR (needs careful review): ..." — since this is a production-code change, not a routine test fix}
 

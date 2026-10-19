@@ -25,6 +25,25 @@ on:
         required: false
         type: boolean
         default: false
+      clickup_branch_naming:
+        description: >-
+          Opt-in, off by default. For repos whose branch policy requires a ClickUp task
+          ID. Every branch the pipeline pushes then carries the task ID of the branch
+          that triggered the run: a run on bug/CU-101010-cache-loading pushes
+          auto-fix/CU-101010-triage-<sha>, auto-fix/CU-101010-bugfix-issue-<n> and
+          auto-fix/CU-101010-qa-baseline-<sha>. If no task ID can be found, the run
+          pushes no branch at all (issues are still filed). See scripts/branch_names.py.
+        required: false
+        type: boolean
+        default: false
+      clickup_task_id:
+        description: >-
+          Only used with clickup_branch_naming, and only when the triggering branch has
+          no CU-<id> in its name (typically a workflow_dispatch on the default branch).
+          With or without the "CU-" prefix.
+        required: false
+        type: string
+        default: ''
       plugin_ref:
         description: Agentic-QE tag/ref to pin the plugin checkout to.
         required: false
@@ -78,13 +97,13 @@ jobs:
        !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
     steps:
       - name: Check out the target repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out the Agentic QE plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: Cognify-Analytics/Agentic-QE
           ref: ${{ inputs.plugin_ref }}
@@ -113,14 +132,17 @@ jobs:
 
       # Always set up Python: scripts/parse_coverage.py and scripts/resolve_owners.py
       # need it even when the target repo has no Python stack of its own.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: inputs.node_version != ''
         with:
           node-version: ${{ inputs.node_version }}
+          # v5 turns on dependency caching by itself when package.json names a
+          # packageManager. Keep v4's behaviour: setup_script owns installs.
+          package-manager-cache: false
 
       - name: Install target repo dependencies
         run: ${{ inputs.setup_script }}
@@ -134,9 +156,25 @@ jobs:
         id: plan
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
+          # Via env, never inlined into the script: a branch name is user-controlled text.
+          HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
+          CLICKUP: ${{ inputs.clickup_branch_naming }}
+          CLICKUP_TASK_ID: ${{ inputs.clickup_task_id }}
         run: |
           set -euo pipefail
           mkdir -p .claude-pipeline
+          SHA=$(git rev-parse --short HEAD)
+
+          # Every branch name the pipeline will push, decided once, here, by the same
+          # script a local run uses — the skills read them from run.json.
+          CLICKUP_FLAG=()
+          [ "$CLICKUP" = true ] && CLICKUP_FLAG=(--clickup)
+          BRANCH_NAMING=$(python .agentic-qe/scripts/branch_names.py \
+            --branch "$HEAD_BRANCH" --sha "$SHA" --task-id "$CLICKUP_TASK_ID" "${CLICKUP_FLAG[@]}")
+          NAMING_PROBLEM=$(jq -r '.problem // empty' <<<"$BRANCH_NAMING")
+          if [ -n "$NAMING_PROBLEM" ]; then
+            echo "::warning title=Agentic QE branch naming::${NAMING_PROBLEM}. Issues are still filed; fix PRs are only reported."
+          fi
 
           # A usable .qa/ baseline is what makes an incremental run possible at all.
           HAVE_BASELINE=false
@@ -190,8 +228,8 @@ jobs:
           fi
 
           jq -n \
-            --arg sha "$(git rev-parse --short HEAD)" \
-            --arg branch "${{ github.head_ref || github.ref_name }}" \
+            --arg sha "$SHA" \
+            --arg branch "$HEAD_BRANCH" \
             --arg ts "$(date -u +%FT%TZ)" \
             --arg strategy "$STRATEGY" \
             --argjson targets "$TARGETS" \
@@ -199,13 +237,22 @@ jobs:
             --argjson live "${{ inputs.live && 'true' || 'false' }}" \
             --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
             --argjson ctx_changed "$CTX_INPUTS_CHANGED" \
+            --argjson branch_naming "$BRANCH_NAMING" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
             { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
+              branch_naming:$branch_naming,
               ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
                     strategy:$strategy, targets:$targets,
                     context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
 
           cat .claude-pipeline/run.json
+
+      # Remember what was already changed before the model starts, so the safety
+      # check below only judges what the pipeline itself did — a setup_script that
+      # rewrites a lock file is not the pipeline's doing. Kept in RUNNER_TEMP,
+      # outside the repo, where the run cannot touch it.
+      - name: Snapshot the working tree
+        run: python .agentic-qe/scripts/check_test_only_changes.py --snapshot "$RUNNER_TEMP/agentic-qe-tree-before.json"
 
       - name: Run the QA pipeline
         id: claude
@@ -324,6 +371,23 @@ jobs:
           echo "::notice title=Agentic QE cost::\$$COST over $TURNS turns (strategy: $STRAT)"
           exit 0
 
+      # The readable half of the execution log: what the agent did stage by stage,
+      # what it skipped and why, and where it got blocked. The full version goes in
+      # the run artifact as trace.md. Like telemetry, this never fails the job.
+      - name: Summarize what the agent did
+        if: always() && steps.claude.outcome != '' && steps.claude.outcome != 'skipped'
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          if [ -z "${EXEC_FILE:-}" ] || [ ! -f "$EXEC_FILE" ]; then
+            echo "The Claude step left no execution log, so there is no timeline to show."
+            exit 0
+          fi
+          python .agentic-qe/scripts/render_trace.py "$EXEC_FILE" \
+            --pipeline-dir .claude-pipeline \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --out .claude-pipeline/trace.md || true
+
       - name: Assert no production source was changed
         id: assert
         if: always()
@@ -339,18 +403,13 @@ jobs:
             echo "Pipeline did not run — nothing to assert (this check was not exercised)."
             exit 0
           fi
-          # Multi-stack repos (see skills/generate-tests's "stacks" schema) have no single
-          # top-level test_location — join every stack's instead. Falls back to "tests/" if
-          # 01-tests.json is missing/malformed (e.g. the run failed before writing it).
-          LOC=$(jq -r 'if has("stacks") then ([.stacks[].test_location] | join("|")) else (.test_location // "tests/") end' \
-                .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
-          BAD=$(git status --porcelain | awk '{print $2}' \
-                | grep -Ev "^(${LOC}|\.qa/|\.claude-pipeline/)" || true)
-          if [ -n "$BAD" ]; then
-            echo "::error::pipeline modified files outside the test location:"
-            echo "$BAD"
-            exit 1
-          fi
+          # Tests are recognised by path convention, not by 01-tests.json's
+          # test_location: that field is free text ("frontend/src/ (co-located
+          # *.test.ts)"), and no directory prefix can tell a co-located test from
+          # the production file next to it. Coverage reports and caches the test
+          # run leaves behind are reported and ignored. See the script's docstring.
+          python .agentic-qe/scripts/check_test_only_changes.py \
+            --baseline "$RUNNER_TEMP/agentic-qe-tree-before.json" --github
 
       # Persist the pipeline's own bookkeeping to the repo.
       #
@@ -370,6 +429,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          START_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
 
@@ -378,6 +438,20 @@ jobs:
           if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
             echo "Pipeline did not run — nothing to record."
             exit 0
+          fi
+
+          # /triage-tests checks out its own auto-fix/... branches and, in CI, never
+          # switches back. Committing here would stack the record on top of those fix
+          # commits, and the push below would then carry them straight onto the
+          # developer's branch, skipping the fix PR. Go back to the commit the run
+          # started from first. .qa/ is never committed on a fix branch, so the
+          # uncommitted record comes along unchanged.
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "${START_SHA}^{commit}")" ]; then
+            echo "Run ended on $(git rev-parse --abbrev-ref HEAD); returning to ${START_SHA} before recording."
+            if ! git checkout -q --detach "${START_SHA}"; then
+              echo "::warning::Could not return to ${START_SHA} to record .qa/ — the record is in the run artifact only."
+              exit 0
+            fi
           fi
 
           git add -- .qa/ 2>/dev/null || true
@@ -403,7 +477,17 @@ jobs:
           # first-run bootstrap is a workflow_dispatch, which runs against exactly
           # that — so this case gets its own branch and a PR instead of being dropped.
           if [ -z "${HEAD_BRANCH}" ] || [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
-            QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            # Named by scripts/branch_names.py in the plan step. Null means ClickUp
+            # naming is on but there was no task ID: a branch outside the naming
+            # policy is worse than no branch, so keep the record in the artifact only.
+            QA_BRANCH=$(jq -r '.branch_naming.branches.qa_baseline // empty' .claude-pipeline/run.json 2>/dev/null || true)
+            if [ -z "${QA_BRANCH}" ]; then
+              if [ "$(jq -r '.branch_naming.clickup // false' .claude-pipeline/run.json 2>/dev/null)" = true ]; then
+                echo "::warning::ClickUp branch naming is on but no task ID was found, so the .qa/ baseline was not pushed. Re-run with the clickup_task_id input set. The record is in the run artifact only."
+                exit 0
+              fi
+              QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+            fi
             if git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
               cat > qa-baseline-pr.md <<EOF
           Adds the Agentic QE baseline and run record for \`${SHA}\`. Only \`.qa/\` is
@@ -464,7 +548,7 @@ jobs:
             gh pr comment "$PR" --body-file body.md
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: qa-pipeline-${{ github.run_id }}
@@ -476,7 +560,7 @@ jobs:
 
       # Telemetry outlives the scratch artifact on purpose: cost trends only become
       # readable across dozens of runs, which is well past 14 days.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: qa-telemetry-${{ github.run_id }}
