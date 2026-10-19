@@ -1,88 +1,57 @@
-# Copy this file into the target repo as .github/workflows/qa.yml.
-# It calls the reusable workflow hosted in Agentic-QE — see
-# .github/workflows/qa-pipeline.yml there for what it actually does.
+# Agentic QE: copy this file into your repo as .github/workflows/qa.yml
 #
-# ─── EDIT THESE BEFORE THE FIRST RUN ────────────────────────────────────────
-#  1. `setup_script` — MUST match THIS repo's layout. The value below is only an
-#     example for a single-stack Python repo at the root. It is the single most
-#     common reason a first run fails.
-#     If you are RE-COPYING this file over an existing qa.yml, keep your current
-#     setup_script — do not let this example overwrite a working one.
-#  2. `uses:` ref and `plugin_ref` — these are two SEPARATE checkouts and must
-#     name the same version. `uses:` picks the workflow; `plugin_ref` picks the
-#     skills and rules it drives. Mismatching them runs one version's workflow
-#     against another version's skills.
-#  3. `live` — start at false. See README "Set it up in a target repo".
-#  4. `clickup_branch_naming` — turn on ONLY if this repo's branch policy
-#     requires a ClickUp task ID (CU-<id>) in every branch name.
-# ────────────────────────────────────────────────────────────────────────────
+# Only one thing must be changed before the first run: STEP 1 below.
+# Everything else works as it is.
+#
+# Updating an existing qa.yml? Keep your current setup_script.
+# Full guide: README, "Run it as a GitHub Action".
+
 name: QA Pipeline
+
+# Runs when a pull request is opened, or a draft is marked ready for review.
+# New commits on an open PR don't re-run it. To re-test, use
+# Actions → QA Pipeline → Run workflow.
 on:
   pull_request:
     types: [opened, ready_for_review]
-    paths-ignore: ['**/*.md', 'docs/**', '.github/**']
+    paths-ignore: ['**/*.md', 'docs/**', '.github/**']   # docs-only PRs are skipped
   workflow_dispatch:
     inputs:
       clickup_task_id:
-        description: >-
-          ClickUp task ID for the branches this run pushes (e.g. CU-86bbh0u96).
-          Only needed with clickup_branch_naming on, when running on a branch
-          with no CU-<id> in its name — such as the first run on main.
+        description: ClickUp task ID, e.g. CU-86bbh0u96. Only needed with clickup_branch_naming on, on a branch with no CU-id in its name.
         required: false
         type: string
 
 jobs:
   qa:
+    # The Agentic-QE version to use. Keep plugin_ref below the same.
     uses: Cognify-Analytics/Agentic-QE/.github/workflows/qa-pipeline.yml@main
     secrets: inherit
     with:
-      # ---- REQUIRED: replace with what installs THIS repo's deps and test runner ----
-      # Single-stack Python at the repo root (the example):
+      # ── STEP 1 (required): how to install this repo ─────────────────────────
+      # Replace these lines with the commands that install this repo's
+      # dependencies, its test runner and its coverage plugin.
       setup_script: |
         python -m pip install -U pip
         pip install -r requirements.txt
         pip install pytest pytest-cov
-      #
-      # ## Multi-stack monorepo (backend/ + frontend/) example. To use it, DELETE the
-      # ## single-stack setup_script above, then remove ONLY the leading "# " from the
-      # ## four lines below (leave these "## " lines as comments):
-      # setup_script: |
-      #   python -m pip install -U pip
-      #   pip install -r backend/requirements-dev.txt
-      #   npm --prefix frontend ci
-      # ------------------------------------------------------------------------------
 
-      # Must name the same Agentic-QE version as the `uses:` ref above.
-      plugin_ref: main
+      # Other examples:
+      #   Backend + frontend:  pip install -r backend/requirements-dev.txt
+      #                        npm --prefix frontend ci
+      #   Backend with uv:     pip install uv
+      #                        uv sync --directory backend --frozen
+      #   Node only:           npm ci
 
-      # Report-only until you have watched a few runs. See README.
-      live: false
+      # ── STEP 2: settings (the defaults are right for a first run) ───────────
+      plugin_ref: main         # same version as the @main in `uses:` above
+      live: false              # false = report only. Set to true later to file real issues and PRs
+      # node_version: '22'     # uncomment if the repo has JavaScript or TypeScript
 
-      # Only if this repo has a JS/TS stack.
-      # node_version: '20'
+      # ── Optional: leave these commented out unless you need them ────────────
+      # fix_bugs: true                 # also open PRs that fix real bugs (set up branch protection first)
+      # clickup_branch_naming: true    # only if branch names must contain CU-<task id>
+      # max_turns: 200                 # raise if runs on a large repo stop early
+      # model: claude-sonnet-5-5       # pin a specific Claude model
 
-      # Ceiling that stops a runaway run; raise for large or multi-stack repos.
-      # Lowering it does NOT make a normal run cheaper.
-      # max_turns: 200
-
-      # Pins the whole pipeline to one model. Check the run's telemetry (job
-      # summary / PR comment footer) before and after — cost here is usually
-      # bound by token volume, not model price. See README "Cost and telemetry".
-      # model: claude-sonnet-5
-
-      # Opt-in, off by default: lets /triage-tests attempt a verified fix to
-      # production source for a narrow set of documented bugs and open a second
-      # PR linked to the filed issue. Turn on branch protection with required
-      # human review FIRST — see README. Safe to try with live: false, which
-      # only reports what it would fix.
-      # fix_bugs: true
-
-      # Opt-in, off by default. Turn on if this repo only allows branch names
-      # carrying a ClickUp task ID. Every branch the pipeline pushes then reuses
-      # the task ID of the branch it ran on — a run on bug/CU-101010-cache-loading
-      # pushes auto-fix/CU-101010-bugfix-issue-9, auto-fix/CU-101010-triage-<sha>,
-      # and so on, instead of auto-fix/bugfix-issue-9. If the branch has no CU-<id>,
-      # nothing is pushed (issues are still filed) unless you run it manually and
-      # fill in the clickup_task_id box. Leave off if your repo has no such rule.
-      # clickup_branch_naming: true
-      clickup_task_id: ${{ inputs.clickup_task_id }}
+      clickup_task_id: ${{ inputs.clickup_task_id }}   # leave as it is

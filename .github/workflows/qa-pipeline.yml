@@ -97,13 +97,13 @@ jobs:
        !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
     steps:
       - name: Check out the target repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out the Agentic QE plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: Cognify-Analytics/Agentic-QE
           ref: ${{ inputs.plugin_ref }}
@@ -132,14 +132,17 @@ jobs:
 
       # Always set up Python: scripts/parse_coverage.py and scripts/resolve_owners.py
       # need it even when the target repo has no Python stack of its own.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         if: inputs.node_version != ''
         with:
           node-version: ${{ inputs.node_version }}
+          # v5 turns on dependency caching by itself when package.json names a
+          # packageManager. Keep v4's behaviour: setup_script owns installs.
+          package-manager-cache: false
 
       - name: Install target repo dependencies
         run: ${{ inputs.setup_script }}
@@ -243,6 +246,13 @@ jobs:
                     context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
 
           cat .claude-pipeline/run.json
+
+      # Remember what was already changed before the model starts, so the safety
+      # check below only judges what the pipeline itself did — a setup_script that
+      # rewrites a lock file is not the pipeline's doing. Kept in RUNNER_TEMP,
+      # outside the repo, where the run cannot touch it.
+      - name: Snapshot the working tree
+        run: python .agentic-qe/scripts/check_test_only_changes.py --snapshot "$RUNNER_TEMP/agentic-qe-tree-before.json"
 
       - name: Run the QA pipeline
         id: claude
@@ -393,18 +403,13 @@ jobs:
             echo "Pipeline did not run — nothing to assert (this check was not exercised)."
             exit 0
           fi
-          # Multi-stack repos (see skills/generate-tests's "stacks" schema) have no single
-          # top-level test_location — join every stack's instead. Falls back to "tests/" if
-          # 01-tests.json is missing/malformed (e.g. the run failed before writing it).
-          LOC=$(jq -r 'if has("stacks") then ([.stacks[].test_location] | join("|")) else (.test_location // "tests/") end' \
-                .claude-pipeline/01-tests.json 2>/dev/null || echo tests/)
-          BAD=$(git status --porcelain | awk '{print $2}' \
-                | grep -Ev "^(${LOC}|\.qa/|\.claude-pipeline/)" || true)
-          if [ -n "$BAD" ]; then
-            echo "::error::pipeline modified files outside the test location:"
-            echo "$BAD"
-            exit 1
-          fi
+          # Tests are recognised by path convention, not by 01-tests.json's
+          # test_location: that field is free text ("frontend/src/ (co-located
+          # *.test.ts)"), and no directory prefix can tell a co-located test from
+          # the production file next to it. Coverage reports and caches the test
+          # run leaves behind are reported and ignored. See the script's docstring.
+          python .agentic-qe/scripts/check_test_only_changes.py \
+            --baseline "$RUNNER_TEMP/agentic-qe-tree-before.json" --github
 
       # Persist the pipeline's own bookkeeping to the repo.
       #
@@ -424,6 +429,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+          START_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -uo pipefail
 
@@ -432,6 +438,20 @@ jobs:
           if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
             echo "Pipeline did not run — nothing to record."
             exit 0
+          fi
+
+          # /triage-tests checks out its own auto-fix/... branches and, in CI, never
+          # switches back. Committing here would stack the record on top of those fix
+          # commits, and the push below would then carry them straight onto the
+          # developer's branch, skipping the fix PR. Go back to the commit the run
+          # started from first. .qa/ is never committed on a fix branch, so the
+          # uncommitted record comes along unchanged.
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse "${START_SHA}^{commit}")" ]; then
+            echo "Run ended on $(git rev-parse --abbrev-ref HEAD); returning to ${START_SHA} before recording."
+            if ! git checkout -q --detach "${START_SHA}"; then
+              echo "::warning::Could not return to ${START_SHA} to record .qa/ — the record is in the run artifact only."
+              exit 0
+            fi
           fi
 
           git add -- .qa/ 2>/dev/null || true
@@ -528,7 +548,7 @@ jobs:
             gh pr comment "$PR" --body-file body.md
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: qa-pipeline-${{ github.run_id }}
@@ -540,7 +560,7 @@ jobs:
 
       # Telemetry outlives the scratch artifact on purpose: cost trends only become
       # readable across dozens of runs, which is well past 14 days.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: qa-telemetry-${{ github.run_id }}

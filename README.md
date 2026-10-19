@@ -250,11 +250,35 @@ locally — mode, live flag, and target list all travel through
 `.claude-pipeline/run.json`, which the workflow writes before the model ever
 runs.
 
-Afterwards the workflow asserts no production source was touched, commits
-`.qa/` onto the PR's head branch, posts a sticky PR comment with
-`summary.md`, and uploads the scratch files as an artifact. SIMPLE test
-fixes arrive as a separate auto-fix PR against the developer's own branch.
-The pipeline never pushes to or merges into a default branch.
+Afterwards the workflow asserts no production source was touched (see
+[The safety check](#the-safety-check)), commits `.qa/` onto the PR's head
+branch, posts a sticky PR comment with `summary.md`, and uploads the
+scratch files as an artifact. SIMPLE test fixes arrive as a separate
+auto-fix PR against the developer's own branch. The pipeline never pushes
+to or merges into a default branch.
+
+### The safety check
+
+After Claude finishes, the step **"Assert no production source was
+changed"** runs `scripts/check_test_only_changes.py`. It sorts every
+changed file into one of these groups:
+
+| Group | Examples | Result |
+|---|---|---|
+| Pipeline output | `.qa/`, `.claude-pipeline/` | ✅ Allowed |
+| Tests | Anything in a `tests/`, `test/`, `spec/`, `__tests__/` or `src/test/` folder; files named `test_x.py`, `x.test.ts`, `x.spec.js`, `x_test.go`, `FooTest.java`, `conftest.py` | ✅ Allowed, including tests that sit next to the code (`src/lib/format.test.ts`) |
+| Test-run by-products | `coverage.xml`, `.coverage`, `coverage/`, `htmlcov/`, `__pycache__/`, `.venv/` | ✅ Ignored. Only counts for new, untracked files, and they're never committed |
+| Already changed before Claude started | A lock file rewritten by `setup_script` | ✅ Not judged. A snapshot is taken just before Claude runs |
+| Anything else | Production source, config, lock files | ❌ The job fails |
+
+When it fails, the error annotation lists every file that caused it.
+Because the check fails, `.qa/` isn't recorded for that run, so fix the
+cause and run it again.
+
+Tests are recognised by their folder or file name, never by what the run
+says it wrote: a check that trusted the model's own report wouldn't check
+anything. If a repo keeps tests somewhere unusual, a genuine test can be
+flagged. The patterns are at the top of the script.
 
 ### Set it up in a target repo
 
@@ -632,6 +656,9 @@ Three things worth knowing:
 - If `.qa/` is listed in the repo's `.gitignore`, nothing can be recorded.
   The step says so explicitly rather than reporting "no changes" — that
   entry needs removing, since `.qa/` is meant to be committed.
+- `/triage-tests` leaves the run on its own `auto-fix/...` branch. Before
+  committing, the step switches back to the commit the run started from,
+  so fix commits only ever reach the developer's branch through the fix PR.
 
 Getting `.qa/` into the repo is also what keeps runs cheap: without a
 committed baseline, every run bootstraps the whole repo from scratch
@@ -729,6 +756,7 @@ python scripts/render_trace.py run.jsonl --out trace.md
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
   - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
   - `render_trace.py` — turns a run's execution log into the readable "what the agent did" timeline
+  - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check))
 - `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
