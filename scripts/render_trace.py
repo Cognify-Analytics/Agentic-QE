@@ -3,9 +3,11 @@
 
 The CI job log shows the run as raw SDK messages, one JSON blob per tool
 call, which nobody can read. This script reads the same messages (the
-claude-code-action `execution_file`, or `claude -p --output-format
-stream-json --verbose` output) plus the pipeline's own scratch files, and
-writes two Markdown documents:
+claude-code-action `execution_file`, `claude -p --output-format
+stream-json --verbose` output, or a local interactive run's session
+transcript converted by scripts/local_run_log.py) plus the pipeline's own
+scratch files, and writes two Markdown documents -- the same ones for a CI
+run and a local run:
 
 - a short one for the job summary page: how the run ended, each stage's
   outcome and timing, what was skipped and why, the agent's decisions, any
@@ -38,6 +40,7 @@ from datetime import datetime
 SUMMARY_STEP_LIMIT = 80
 
 STAGE_KEYS = {
+    "follow_up_issues": "follow-up-issues",
     "generate_tests": "generate-tests",
     "build_context": "build-context",
     "triage_tests": "triage-tests",
@@ -46,6 +49,7 @@ STAGE_KEYS = {
 SKIP_REASONS = {
     "skipped:triage-only": "the PR changed no source files, so there was nothing to generate tests for",
     "skipped:inputs-unchanged": "no doc, manifest or schema file changed and Stage 1 changed nothing, so the context was still current",
+    "skipped:follow-up-only": "this run was started by a maintainer's reply on an issue, so only that issue was followed up",
     "not_reached": "the pipeline stopped before this stage",
 }
 
@@ -451,8 +455,32 @@ def skipped_section(stages_json, tests, triage):
     return lines
 
 
-def decisions_section(tests, triage):
+def followup_section(followup):
     lines = []
+    if not isinstance(followup, dict):
+        return lines
+    if followup.get("status") not in (None, "ok"):
+        lines.append(f"**Issue follow-up ended `{followup.get('status')}`:** "
+                     f"{one_line(followup.get('reason') or '; '.join(map(str, followup.get('problems') or [])) or 'no reason recorded', 300)}")
+        lines.append("")
+    actions = [a for a in followup.get("actions") or [] if isinstance(a, dict)]
+    if actions:
+        lines.append("**Replies on QA issues, and what was done:**")
+        lines.append("")
+        lines.append("| Issue | Decision | By | Action |")
+        lines.append("|---|---|---|---|")
+        for a in actions[:30]:
+            action = a.get("action", "?") + (f" ({a['pr_url']})" if a.get("pr_url") else "")
+            if a.get("report_only"):
+                action += " [report-only]"
+            lines.append(f"| #{a.get('issue', '?')} | {cell(a.get('decision') or '—', 30)} | "
+                         f"{cell(a.get('decided_by') or '—', 40)} | {cell(action, 200)} |")
+        lines.append("")
+    return lines
+
+
+def decisions_section(tests, triage, followup=None):
+    lines = followup_section(followup)
     if isinstance(tests, dict):
         if tests.get("status") not in (None, "ok"):
             why = tests.get("reason") or tests.get("note") or tests.get("notes") or "no reason recorded"
@@ -504,10 +532,23 @@ def decisions_section(tests, triage):
         for b in triage.get("bug_fix_prs_created") or []:
             if isinstance(b, dict):
                 lines.append(f"- **Bug fix** in {code(b.get('file_changed', '?'))}: {one_line(b.get('summary', ''), 200)}")
+        for a in triage.get("acknowledged") or []:
+            if isinstance(a, dict):
+                lines.append(f"- Already decided on #{a.get('issue', '?')} ({a.get('decision', '?')}): {code(a.get('test', '?'))}, no new issue")
+    gaps = []
+    for source in (tests, triage):
+        if isinstance(source, dict):
+            gaps += [g for g in source.get("tooling_gaps") or [] if isinstance(g, dict)]
+    if gaps:
+        lines.append("")
+        lines.append("**Missing test tooling** (install steps: `.qa/context.md`, section 5):")
+        for g in gaps:
+            where = f"{g['stack']}: " if g.get("stack") else ""
+            lines.append(f"- {where}{code(g.get('tool', '?'))} {one_line(g.get('version') or '', 80)}: {one_line(g.get('effect') or g.get('needed_for') or '', 200)}")
     return lines
 
 
-def render(trace, stages_json, tests, triage, full):
+def render(trace, stages_json, tests, triage, full, followup=None):
     out = ["### Agentic QE — what the agent did", ""]
     res = trace.result or {}
     if res:
@@ -537,7 +578,7 @@ def render(trace, stages_json, tests, triage, full):
         if len(skipped) > 8:
             out += [f"<details><summary>{len(skipped) - 8} more</summary>", ""] + skipped[8:] + ["", "</details>", ""]
 
-    decisions = decisions_section(tests, triage)
+    decisions = decisions_section(tests, triage, followup)
     if decisions:
         out += ["#### Decisions", ""] + decisions + [""]
 
@@ -571,7 +612,7 @@ def render(trace, stages_json, tests, triage, full):
                 out += [f"<details><summary>{summary}</summary>", ""]
             out += [render_step(s, trace.start_ts, full) for s in shown]
             if len(steps) > len(shown):
-                out.append(f"- …{len(steps) - len(shown)} more steps in `trace.md` (run artifact)")
+                out.append(f"- …{len(steps) - len(shown)} more steps in `trace.md`")
             if report:
                 quoted = report.replace("\n", "\n> ") if full else one_line(report, 1500)
                 out +=["", "**Stage report:**", "", "> " + quoted]
@@ -579,7 +620,7 @@ def render(trace, stages_json, tests, triage, full):
             if not full:
                 out += ["</details>", ""]
     if not full:
-        out.append("<sub>Full step-by-step trace, with the agent's complete commentary: `trace.md` in the run's `qa-pipeline-*` artifact.</sub>")
+        out.append("<sub>Full step-by-step trace, with the agent's complete commentary: `trace.md` (CI: in the run's `qa-pipeline-*` artifact; local: `.claude-pipeline/trace.md`).</sub>")
     return "\n".join(out) + "\n"
 
 
@@ -602,14 +643,15 @@ def main():
     stages_json = load_json(os.path.join(pdir, "stages.json"))
     tests = load_json(os.path.join(pdir, "01-tests.json"))
     triage = load_json(os.path.join(pdir, "03-triage.json"))
+    followup = load_json(os.path.join(pdir, "00-followup.json"))
 
-    short = render(trace, stages_json, tests, triage, full=False)
+    short = render(trace, stages_json, tests, triage, full=False, followup=followup)
     if args.summary:
         with open(args.summary, "a", encoding="utf-8") as f:
             f.write(short)
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
-            f.write(render(trace, stages_json, tests, triage, full=True))
+            f.write(render(trace, stages_json, tests, triage, full=True, followup=followup))
     if not args.summary and not args.out:
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stdout.write(short)

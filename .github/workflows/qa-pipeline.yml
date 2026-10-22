@@ -334,6 +334,9 @@ jobs:
 
       # Cost/turn telemetry. Deliberately never fails the job — a missing or
       # reshaped execution log costs us a data point, not a run.
+      # Built by scripts/collect_telemetry.py, the same script a local run uses
+      # (scripts/run_local.py, or /test-pipeline's own Finish step), so a CI run and
+      # a local run produce the same telemetry.json and the same summary block.
       - name: Collect telemetry
         id: telemetry
         if: always()
@@ -345,89 +348,34 @@ jobs:
           # This step runs on always(), so it can be reached even if the plan step
           # (which normally creates this) never got there.
           mkdir -p .claude-pipeline
-
-          # An earlier step failing (dependency setup is the usual one) skips the
-          # pipeline entirely. Reporting "$n/a over n/a turns" for that reads like a
-          # run that happened and cost nothing, which is worse than saying nothing.
-          if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
-            echo "The pipeline never ran — an earlier step failed. No telemetry to collect."
-            printf '%s\n' '{"schema_version":1,"conclusion":"did-not-run"}' > .claude-pipeline/telemetry.json
-            { echo "### Agentic QE"
-              echo
-              echo "The pipeline did not run: a step before it failed — most often \`setup_script\` not matching the repo's layout. See the job log."
-            } >> "$GITHUB_STEP_SUMMARY" || true
-            exit 0
-          fi
-
-          # Search the execution log recursively for the object carrying cost, rather
-          # than assuming a fixed position/shape, so an action upgrade can't break this.
-          RESULT='{}'
           if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
-            RESULT=$(jq -c '[.. | objects | select(has("total_cost_usd"))] | last // {}' \
-                     "$EXEC_FILE" 2>/dev/null || echo '{}')
             cp "$EXEC_FILE" .claude-pipeline/execution-log.json 2>/dev/null || true
           fi
 
-          # Per-stage outcomes, written by /test-pipeline. This is what proves whether
-          # a stage was actually skipped rather than just quietly cheap.
-          STAGES=$(jq -c '.' .claude-pipeline/stages.json 2>/dev/null || echo 'null')
-          RUN=$(jq -c '.' .claude-pipeline/run.json 2>/dev/null || echo '{}')
+          # The plugin checkout itself failed: there is no script to run. Say the
+          # pipeline didn't run rather than reporting a run that "cost nothing".
+          if [ ! -f .agentic-qe/scripts/collect_telemetry.py ]; then
+            echo '{"schema_version":1,"source":"ci","conclusion":"did-not-run"}' > .claude-pipeline/telemetry.json
+            echo "### Agentic QE" >> "$GITHUB_STEP_SUMMARY" || true
+            echo "The pipeline did not run: the Agentic QE plugin could not be checked out. See the job log." >> "$GITHUB_STEP_SUMMARY" || true
+            exit 0
+          fi
 
-          jq -n \
-            --argjson result "$RESULT" \
-            --argjson stages "$STAGES" \
-            --argjson run "$RUN" \
-            --arg repo "${{ github.repository }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --arg conclusion "${{ steps.claude.outcome }}" \
-            --arg model "${{ inputs.model || 'action-default' }}" \
-            --argjson max_turns "${{ inputs.max_turns }}" '
-            { schema_version: 1,
-              repo: $repo, run_id: $run_id, run_url: $run_url,
-              conclusion: $conclusion,
-              sha:      ($run.sha      // null),
-              branch:   ($run.branch    // null),
-              timestamp:($run.timestamp // null),
-              pr_number:($run.ci.pr_number // null),
-              strategy: ($run.ci.strategy  // null),
-              context_inputs_changed: ($run.ci.context_inputs_changed // null),
-              live:     ($run.live     // null),
-              fix_bugs: ($run.fix_bugs // null),
-              model: $model,
-              max_turns: $max_turns,
-              cost_usd:    ($result.total_cost_usd // null),
-              num_turns:   ($result.num_turns      // null),
-              duration_ms: ($result.duration_ms    // null),
-              usage:       ($result.usage          // {}),
-              stages: $stages }' > .claude-pipeline/telemetry.json 2>/dev/null \
-            || echo '{"schema_version":1,"error":"telemetry assembly failed"}' > .claude-pipeline/telemetry.json
-
-          COST=$(jq -r '.cost_usd  // "n/a"' .claude-pipeline/telemetry.json)
-          TURNS=$(jq -r '.num_turns // "n/a"' .claude-pipeline/telemetry.json)
-          STRAT=$(jq -r '.strategy  // "n/a"' .claude-pipeline/telemetry.json)
-
-          { echo "### Agentic QE — run cost"
-            echo
-            echo "| Metric | Value |"
-            echo "|---|---|"
-            echo "| Cost (USD) | \`$COST\` |"
-            echo "| Turns | \`$TURNS\` |"
-            echo "| Strategy | \`$STRAT\` |"
-            echo "| Model | \`${{ inputs.model || 'action-default' }}\` |"
-            echo
-            echo "<details><summary>Full telemetry JSON</summary>"
-            echo
-            echo '```json'
-            cat .claude-pipeline/telemetry.json
-            echo '```'
-            echo
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY" || true
-
-          echo "cost=$COST"   >> "$GITHUB_OUTPUT"
-          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Agentic QE cost::\$$COST over $TURNS turns (strategy: $STRAT)"
+          # An empty or "skipped" outcome means an earlier step failed (dependency
+          # setup is the usual one); the script then records did-not-run.
+          python .agentic-qe/scripts/collect_telemetry.py \
+            --execution-file "${EXEC_FILE:-}" \
+            --source ci \
+            --outcome "${CLAUDE_OUTCOME}" \
+            --pipeline-dir .claude-pipeline \
+            --repo "${{ github.repository }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --model "${{ inputs.model || 'action-default' }}" \
+            --max-turns "${{ inputs.max_turns }}" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github || true
           exit 0
 
       # The readable half of the execution log: what the agent did stage by stage,

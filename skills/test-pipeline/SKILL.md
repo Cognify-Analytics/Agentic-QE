@@ -354,6 +354,10 @@ of. Before stopping at any gate above, write both:
    `"reason"`. Fill in whatever is genuinely known and leave the rest out
    rather than guessing at numbers no stage produced.
 
+3. **Local runs:** the telemetry and timeline from Finish step 5. In CI the
+   workflow builds them on every run, halted or not, and a local run must
+   match.
+
 Then report what failed on screen and stop. In CI the workflow commits
 that record the same way it would a successful run, so a halted run is
 visible in the repo rather than only in a job log that ages out.
@@ -375,7 +379,38 @@ visible in the repo rather than only in a job log that ages out.
    `.qa/`. Otherwise, copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
    full scratch detail, just enough for a team to see pipeline history at a
    glance (see schema below). Create `.qa/runs/` if it doesn't exist.
-5. **Local runs only** — remind the developer on screen to commit
+5. **Telemetry and the "what the agent did" timeline: local runs only.**
+   CI builds these in the workflow after the session ends. Skip this step
+   when `run.json`'s `"mode"` is `"ci"`, and when the environment variable
+   `AGENTIC_QE_TELEMETRY` is `external` (`scripts/run_local.py` set it: it
+   builds them itself afterwards, from the complete log, cost included).
+   Otherwise run these three commands, in this order, from the repo root.
+   They are the same scripts CI uses, so the files match CI's:
+
+   ```bash
+   rm -f .claude-pipeline/run-summary.md
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/local_run_log.py" --pipeline-dir .claude-pipeline
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/collect_telemetry.py" --execution-file .claude-pipeline/execution-log.json \
+     --source local-interactive --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/render_trace.py" .claude-pipeline/execution-log.json \
+     --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md --out .claude-pipeline/trace.md
+   ```
+
+   | File | Same as CI's |
+   |---|---|
+   | `execution-log.json` | the run's execution log in the artifact (here: cut from this session's transcript) |
+   | `telemetry.json` | the `qa-telemetry-*` artifact (same schema; `"source": "local-interactive"`). A copy per run is kept in `telemetry-history/` |
+   | `run-summary.md` | the job summary page: the run-cost block, then the timeline |
+   | `trace.md` | `trace.md` in the run artifact |
+   | `summary.md` | the PR comment (written in step 3) |
+
+   Session transcripts record tokens, not cost, so `cost_usd` is `null`
+   here. `scripts/run_local.py` gives the exact cost. None of these
+   scripts ever fails the run. If one prints an error, say so and carry on.
+   Then tell the developer, in two or three lines: turns, duration and
+   tokens from `telemetry.json`, the stage outcomes, and where
+   `run-summary.md` and `trace.md` are.
+6. **Local runs only** — remind the developer on screen to commit
    `.qa/context.md`, `.qa/github-action-qa-pipeline-template.yml`,
    `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
    every test file `01-tests.json` listed under
@@ -442,7 +477,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 {pr_planned or pr_url — "no source code changed" unless bug_fix_prs_created is non-empty, in which case say explicitly that fix_bugs was on and list each bug-fix PR with the issue it relates to}
 
 ## Please commit
-{local runs: the exact file list from step 5 above}
+{local runs: the exact file list from Finish step 6 above}
 {CI runs: replace this section with "## Recorded" — say that `.qa/` was committed to the PR's head branch by the workflow, and name any test files travelling in the auto-fix PR}
 ```
 

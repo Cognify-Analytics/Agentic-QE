@@ -774,9 +774,50 @@ It's surfaced in three places:
 
 The committed run record in `.qa/runs/<date>-<sha>.json` carries the
 strategy and per-stage outcomes too, locally and in CI. Join it to a
-`telemetry.json` on `sha` to get the full picture — the cost figures can
-only come from the CI side, since a run has no way to observe its own token
-spend from inside.
+`telemetry.json` on `sha` to get the full picture.
+
+### Local runs get the same telemetry and summaries
+
+A local run writes the same files CI does, built by the same scripts
+(`collect_telemetry.py`, `render_trace.py`), into `.claude-pipeline/`:
+
+| Local file | CI equivalent |
+|---|---|
+| `telemetry.json` (+ one copy per run in `telemetry-history/`) | the `qa-telemetry-<run_id>` artifact |
+| `run-summary.md` | the job summary page: run-cost table, then "what the agent did" |
+| `trace.md` | `trace.md` in the run artifact |
+| `summary.md` | the sticky PR comment |
+| `execution-log.json` | the raw log in the run artifact |
+
+There are two ways to run locally:
+
+- **Inside a Claude Code session** (`/agentic-qe:test-pipeline`): the
+  pipeline builds these files itself at the end. The log is cut from the
+  session's own transcript (`scripts/local_run_log.py`), so turns, tokens,
+  duration and the full timeline match CI. **Cost shows `n/a`**, because
+  session transcripts record tokens but not cost. `/cost` in the session
+  shows the session's total.
+- **Headless, exactly like CI, with cost**: run from the target repo's root.
+
+  ```powershell
+  # Windows PowerShell
+  py <path-to-agentic-qe>\scripts\run_local.py --live
+  ```
+  ```bash
+  # macOS / Linux / Git Bash
+  python <path-to-agentic-qe>/scripts/run_local.py --live
+  ```
+
+  It runs `claude -p "/agentic-qe:test-pipeline …" --output-format
+  stream-json` with CI's tool allowlist and turn limit, prints one line per
+  step as it goes, then builds every file in the table, cost included.
+  Arguments it doesn't recognise (`--live`, `--fix-bugs`, a target path)
+  are passed to the pipeline. `--max-turns`, `--model` and `--plugin-dir`
+  work like the CI inputs.
+
+Every `telemetry.json` has a `source` field (`ci`, `local-headless` or
+`local-interactive`), and a `cost_source` that says where the cost came
+from, or why it's missing.
 
 **If you want to tune further:** the `model` input sets `--model` for the
 whole pipeline. Measure before reaching for it — an Opus→Sonnet swap
@@ -813,13 +854,12 @@ section called **"Agentic QE — what the agent did"**:
 The full version, with untruncated commentary, command output, and each
 stage's closing report, is `trace.md` in the `qa-pipeline-<run_id>`
 artifact, next to the raw `execution-log.json` it is built from.
-`scripts/render_trace.py` builds both versions. It also renders a local
-headless run:
-
-```
-claude -p '/agentic-qe:test-pipeline' --output-format stream-json --verbose > run.jsonl
-python scripts/render_trace.py run.jsonl --out trace.md
-```
+`scripts/render_trace.py` builds both versions. A local run writes the
+same two, as `.claude-pipeline/run-summary.md` and
+`.claude-pipeline/trace.md` (see [Local runs get the same telemetry and
+summaries](#local-runs-get-the-same-telemetry-and-summaries)). The
+timeline also lists Stage 0's follow-up decisions and any missing test
+tooling.
 
 ## Project layout
 
@@ -834,6 +874,9 @@ python scripts/render_trace.py run.jsonl --out trace.md
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
   - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
   - `render_trace.py` — turns a run's execution log into the readable "what the agent did" timeline
+  - `collect_telemetry.py` — builds `telemetry.json` and the run-cost block, the same way for CI and local runs
+  - `local_run_log.py` — turns the Claude Code session that ran the pipeline into a CI-shaped execution log
+  - `run_local.py` — runs the pipeline headless on your machine, exactly as CI does, cost included
   - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check))
 - `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
