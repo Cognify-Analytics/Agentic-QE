@@ -64,6 +64,27 @@ cheaper outcome. **AMBIGUOUS is COMPLEX.** A missed opportunity to auto-fix a
 test is a minor cost. A real bug auto-fixed into invisibility is the failure
 this entire project exists to prevent — see PRD Section 1, Part 3.
 
+### Recognising the signals per stack
+
+The tables above are language-neutral. This is what their signals look like in real output. The provenance override still comes first: none of these makes a human-written test SIMPLE.
+
+| Output | Stack | Label |
+|---|---|---|
+| `ModuleNotFoundError` / `ImportError`; `Cannot find module '…' from '…'` (Jest); `Failed to resolve import` (Vitest); `cannot find symbol` / `Unresolved reference` in the **test** file (Java/Kotlin) | all | SIMPLE: import or module-not-found |
+| `TS2339 Property 'x' does not exist on type`, `TS2345` argument type errors, **in the test file** | TypeScript | SIMPLE: typo or type mismatch in the test |
+| `fixture 'x' not found` (pytest); `NoSuchBeanDefinitionException` in a `@WebMvcTest` (a collaborator wasn't given a `@MockitoBean`); `MockKException: no answer found` for a call the code obviously makes | pytest / Spring / MockK | SIMPLE: missing or wrong fixture |
+| `expected: <15> but was: <15.00>` on a `BigDecimal`; `toBe` on an object (Jest `"serializes to the same string"`) | Java / JS | SIMPLE: wrong assertion method used |
+| A business value differs: `expected: <0.15> but was: <0.10>`, `expect(received).toBe(expected)`, `AssertionError` on a computed result | all | COMPLEX: assertion fails on business logic |
+| A snapshot no longer matches | Jest / Vitest | COMPLEX: the output changed. Never update a snapshot (`-u`) during triage |
+| `UnnecessaryStubbingException` (Mockito) | Java / Kotlin | SIMPLE when the stub is setup noise for this path. COMPLEX when the contract says the code *should* have made that call (a save, a payment, an event) |
+| `PotentialStubbingProblem` (Mockito), or a MockK call with unexpected arguments | Java / Kotlin | AMBIGUOUS unless you can show the stub's arguments were wrong about the real signature. Code passing a value that contradicts the contract is COMPLEX |
+| `Unable to find an element with the role "button" and name …` | React Testing Library | SIMPLE only if the component's source renders that element under a different accessible name or role (the query was wrong). If the documented element isn't rendered at all, COMPLEX |
+| `Exceeded timeout of 5000 ms`, or a test that hangs | Jest / Vitest | AMBIGUOUS. SIMPLE only when you can point at the cause in the test: a mock never given a resolved value, or a fake timer never advanced. A real hang is a timing/race COMPLEX |
+| `NullPointerException` / `TypeError: Cannot read properties of undefined` thrown inside **production** code | all | AMBIGUOUS. A mock returning its default `null`/`undefined` because the test forgot to stub it is SIMPLE. Code that doesn't handle a documented empty/absent case is COMPLEX |
+| Passes alone, fails in the full suite (or the reverse) | all | Shared state between tests. If the leaking state is in **test code** (an unreset mock, `process.env`, a `mockkObject` without `unmockkAll`), SIMPLE. If it's in production code (a singleton, a module-level cache), COMPLEX |
+
+`act(...)` warnings and deprecation warnings are not failures, so don't classify them. "0 tests run" or "No tests found" isn't a test failure either; it's a location or configuration problem (`rules/lang/javascript/js-ts-test-location.md`, `rules/lang/jvm/jvm-build-and-location.md` §3). Report it in the run's notes.
+
 ### Applying this without `.qa/context.md`
 
 If `.qa/context.md` doesn't exist yet (e.g. `/build-context` hasn't run),

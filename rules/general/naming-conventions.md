@@ -24,7 +24,7 @@ Use the target language's idioms:
 
 ### Test Method/Function Naming
 
-Format: `{testedMethod}_{givenState}_{expectedOutcome}` (adapt casing to the language's convention — `snake_case` in Python, `camelCase` in Java/JS/Go).
+Format: `{testedMethod}_{givenState}_{expectedOutcome}` (adapt casing to the language's convention — `snake_case` in Python, `camelCase` in Java/Kotlin/JS/Go). If the repo's existing tests use a different style (sentence-style `it('throws when items are empty')`, Kotlin backtick names), match it, but keep both the state and the outcome in the name.
 
 **Incorrect:**
 
@@ -52,6 +52,16 @@ def test_get_user_unauthorized_returns_401(): ...
 // JS/Jest
 test('calculateTotal_validProducts_returnsSum', () => { ... });
 test('getUser_unauthorized_returns401', () => { ... });
+```
+
+```java
+// Java (JUnit)
+@Test void calculateTotal_validProducts_returnsSum() { ... }
+```
+
+```kotlin
+// Kotlin (JUnit)
+@Test fun getUser_unauthorized_throwsAccessDenied() { ... }
 ```
 
 ```go

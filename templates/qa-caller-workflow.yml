@@ -41,12 +41,19 @@ jobs:
       #                        npm --prefix frontend ci
       #   Backend with uv:     pip install uv
       #                        uv sync --directory backend --frozen
-      #   Node only:           npm ci
+      #   Node / React / Next: npm ci              (or: corepack enable && pnpm install --frozen-lockfile)
+      #   Java/Kotlin, Maven:  ./mvnw -q -B dependency:go-offline
+      #   Java/Kotlin, Gradle: ./gradlew --no-daemon dependencies > /dev/null
+      #
+      # Test libraries must already be in the repo's own manifest (jest/vitest,
+      # @testing-library/*, junit-jupiter, mockito/mockk...). The pipeline never
+      # adds dependencies; it reports the ones it needed and could not find.
 
       # ── STEP 2: settings (the defaults are right for a first run) ───────────
       plugin_ref: main         # same version as the @main in `uses:` above
       live: false              # false = report only. Set to true later to file real issues and PRs
       # node_version: '22'     # uncomment if the repo has JavaScript or TypeScript
+      # java_version: '21'     # uncomment if the repo has Java or Kotlin (match the build's target)
 
       # ── Optional: leave these commented out unless you need them ────────────
       # fix_bugs: true                 # also open PRs that fix real bugs (set up branch protection first)

@@ -30,6 +30,28 @@ for the CI design.
 | `--clickup-branches` | Opt-in. Names every branch the pipeline pushes after your branch's ClickUp task ID (see [ClickUp branch naming](#clickup-branch-naming--opt-in)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
 
+## Supported languages
+
+The pipeline works out a repo's language and test setup from its manifest
+files, and never assumes one. Every language gets the shared rules in
+`rules/general/`. Four languages also have their own rules folder:
+
+| Language | Rules | Test frameworks | Framework-specific rules | Coverage read from |
+|---|---|---|---|---|
+| Python | `rules/lang/python/` | pytest | — | pytest-cov (Cobertura) |
+| JavaScript / TypeScript | `rules/lang/javascript/` | Jest, Vitest, `node:test` | React, Next.js (App and Pages Router), Node backends (Express, Fastify, NestJS, Koa, Hono) | Cobertura or LCOV (Jest, Vitest, c8, `node --test`) |
+| Java | `rules/lang/jvm/` + `rules/lang/java/` | JUnit 5 (JUnit 4 when that's all there is), AssertJ, Mockito | Spring Boot | JaCoCo (Maven, Gradle) |
+| Kotlin | `rules/lang/jvm/` + `rules/lang/kotlin/` | JUnit 5, Kotest, MockK (or Mockito via mockito-kotlin), coroutines | Spring Boot | JaCoCo or Kover |
+
+Go, C#, Rust, Ruby, PHP, Elixir, Scala and Swift are detected and get
+the general rules, their default test location and their build commands,
+but no language-specific rules yet.
+
+The pipeline never edits a manifest or build file. Whatever the tests need
+(Jest or Vitest, `@testing-library/*`, `junit-jupiter`, Mockito or MockK,
+a coverage provider) must already be in the repo. If something is missing,
+the run says exactly what, and skips the modules that need it.
+
 ## Install
 
 You only do this once per computer. It takes about 5 minutes.
@@ -266,8 +288,8 @@ changed file into one of these groups:
 | Group | Examples | Result |
 |---|---|---|
 | Pipeline output | `.qa/`, `.claude-pipeline/` | ✅ Allowed |
-| Tests | Anything in a `tests/`, `test/`, `spec/`, `__tests__/` or `src/test/` folder; files named `test_x.py`, `x.test.ts`, `x.spec.js`, `x_test.go`, `FooTest.java`, `conftest.py` | ✅ Allowed, including tests that sit next to the code (`src/lib/format.test.ts`) |
-| Test-run by-products | `coverage.xml`, `.coverage`, `coverage/`, `htmlcov/`, `__pycache__/`, `.venv/` | ✅ Ignored. Only counts for new, untracked files, and they're never committed |
+| Tests | Anything in a `tests/`, `test/`, `spec/`, `__tests__/`, `test-utils/` or `src/test/` folder, or a Gradle test source set (`src/testFixtures/`, `src/jvmTest/`); files named `test_x.py`, `x.test.ts`, `x.spec.js`, `x_test.go`, `FooTest.java`, `FooTest.kt`, `conftest.py`, `test-utils.tsx` | ✅ Allowed, including tests that sit next to the code (`src/lib/format.test.ts`) |
+| Test-run by-products | `coverage.xml`, `.coverage`, `coverage/`, `htmlcov/`, `__pycache__/`, `.venv/`, `target/`, `build/`, `.gradle/`, `.next/`, `*.tsbuildinfo` | ✅ Ignored. Only counts for new, untracked files, and they're never committed |
 | Already changed before Claude started | A lock file rewritten by `setup_script` | ✅ Not judged. A snapshot is taken just before Claude runs |
 | Anything else | Production source, config, lock files | ❌ The job fails |
 
@@ -375,7 +397,9 @@ underscores. Then delete the copies you pasted somewhere in steps 2 and 3.
 5. **Ask a developer on that repo to edit the `setup_script` part.** It's
    the list of commands that install the repo's software, it's different
    for every repo, and getting it wrong is the most common reason a first
-   run fails. Leave everything else as it is. In particular, keep
+   run fails. For a JavaScript/TypeScript repo they should also uncomment
+   `node_version`, and for Java/Kotlin `java_version`, set to the version
+   the project builds with. Leave everything else as it is. In particular, keep
    `live: false` for now, so the pipeline only reports and doesn't file
    anything yet.
 6. Click **Commit changes**. If GitHub asks, choose to create a new branch
@@ -748,16 +772,17 @@ python scripts/render_trace.py run.jsonl --out trace.md
 
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
 - `skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
-- `rules/` — the single shared source of testing rules and conventions, read by the skills
+- `rules/` — the single shared source of testing rules and conventions, read by the skills:
+  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage
 - `templates/` — the GitHub issue and bug-fix PR templates, and the caller workflow to copy into a target repo
 - `scripts/` — helper scripts the skills shell out to:
-  - `parse_coverage.py` — turns a Cobertura `coverage.xml` into the coverage JSON `.qa/test-inventory.json` uses
+  - `parse_coverage.py` — turns Cobertura, JaCoCo or LCOV coverage reports (one, or one per module) into the coverage JSON `.qa/test-inventory.json` uses
   - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
   - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
   - `render_trace.py` — turns a run's execution log into the readable "what the agent did" timeline
   - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check))
-- `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
+- `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
 ## Working on this repo itself

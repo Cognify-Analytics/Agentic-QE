@@ -16,7 +16,10 @@ the stack, don't assume one.
 ## Ground rules
 
 - May only create or change files in the test location (Section below) and its
-  test-data builders. Never touch production source code.
+  test-data builders. Never touch production source code, and never touch
+  build or test configuration either (`package.json`, `pom.xml`,
+  `build.gradle(.kts)`, `pyproject.toml`, `jest`/`vitest` config, `tsconfig`)
+  — a missing test dependency is reported, never added.
 - Never invent a test folder — follow `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` exactly.
 - Quality over speed. Read the rules and the real dependency types before writing
   a single test. Tests that invent method names or fields are worse than no tests.
@@ -34,7 +37,8 @@ exists and its `ci.strategy` is `"triage-only"`, this run has no targets —
 write the `"status": "ok"` triage-only `01-tests.json` described in Step 5
 and **stop here**, before loading a single rule file.
 
-The rules below are ~15k tokens. Loading them and *then* discovering there
+The rules below are ~15k tokens, and more for a JS/TS or JVM stack with
+framework files. Loading them and *then* discovering there
 is nothing to generate is the most expensive way to do nothing this
 pipeline has. (In CI, `/test-pipeline` should have skipped invoking you at
 all in this case — this step is the backstop for a direct invocation, and
@@ -58,9 +62,33 @@ written and where:
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md`
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md`
 - `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md`
-- every file in `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/`, once Step 2
-  has told you the language (if there's no folder for it, say so and carry
-  on with `general/` only)
+- once Step 2 has told you the language, every file directly inside its
+  language folder(s) below — not the `frameworks/` subfolders, which are
+  Tier 1b. If there's no folder for the language, say so and carry on
+  with `general/` only.
+
+| Language (Step 2) | Language folder(s), read every file directly inside |
+|---|---|
+| Python | `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/` |
+| JavaScript, TypeScript | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/` |
+| Java | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` and `${CLAUDE_PLUGIN_ROOT}/rules/lang/java/` |
+| Kotlin | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` and `${CLAUDE_PLUGIN_ROOT}/rules/lang/kotlin/` (where they differ from `java/`, the Kotlin files win) |
+
+**Tier 1b — framework files, as soon as Step 2 has found the framework.**
+These change how every test in the stack is written, so they are read up
+front like Tier 1, but only for a framework the stack actually uses (from
+its manifest's dependencies):
+
+| Dependency in the stack | Read |
+|---|---|
+| `react` (including every Next.js app) | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/react.md` |
+| `next` | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/nextjs.md` (and `react.md`) |
+| `express`, `fastify`, `@nestjs/core`, `koa`, `hono`, or a plain Node server/CLI | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/node-backend.md` |
+| any `spring-boot-starter-*` | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/frameworks/spring-boot.md` |
+
+A full-stack repo can need more than one (a Next.js app with API routes
+reads `react.md` and `nextjs.md`; it reads `node-backend.md` only if it
+also runs its own Express/Fastify server).
 
 **Tier 2 — read the ones that apply to what you're actually about to
 write**, in a single batch once you know the shape of the target (after
@@ -92,8 +120,16 @@ Look at manifest files in the target repo (`pyproject.toml`/`requirements.txt`,
 to determine:
 - the language
 - the test framework already in use (or the conventional default for that language
-  if none is configured yet)
-- the command that runs the tests
+  if none is configured yet) — for JS/TS that means the runner (Jest,
+  Vitest, `node:test`), detected per `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/test-runner-conventions.md`;
+  for Java/Kotlin the build tool and JUnit/Kotest generation, per
+  `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/jvm-build-and-location.md`
+- the application framework(s), if any (React, Next.js, Express/NestJS/…,
+  Spring Boot) — this picks the Tier 1b files
+- the command that runs the tests. It is stored as `test_command` and
+  re-run by later pipeline runs on a fresh checkout, so it must not depend
+  on anything in `.claude-pipeline/`, must exit non-zero when any test
+  fails, and must never run in watch mode
 
 **First, decide single-stack or multi-stack.** Most repos have exactly one
 manifest tree and one test command — that's the single-stack case, and
@@ -191,10 +227,17 @@ invents a method or field that does not exist.
 
 ### Step 8 — Check for existing test-data builders
 
-Look for `conftest.py` fixtures, factory functions, or builder classes already in
-the repo. Add to them rather than duplicating. Only put genuinely large static
-fixtures (sample files, big JSON/CSV payloads) under `tests/fixtures/` — everything
-else is a builder/factory, per `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md`.
+Look for the test-data helpers already in the repo — `conftest.py` fixtures
+(pytest), typed builder functions in `test-utils/` or the repo's helpers
+folder (JS/TS), `*TestData`/builder classes in `src/test/...` (Java),
+default-argument factory functions (Kotlin). Add to them rather than
+duplicating. Only put genuinely large static fixtures (sample files, big
+JSON/CSV payloads) in the language's fixture location (`tests/fixtures/`,
+`src/test/resources/`) — everything else is a builder/factory, per
+`${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md` and the
+language folder's own test-data rules. In JS/TS, never put a helper inside
+a Jest `__tests__/` folder: Jest runs every file there as a test suite (see
+`${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/js-ts-test-location.md` §3).
 
 ### Step 9 — List the test cases
 
@@ -270,10 +313,21 @@ learned in Step 7 and using the builders from Step 8.
 ### Step 13 — Get coverage
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/parse_coverage.py` against the test run's coverage output to get a
-clean per-module coverage JSON. **Multi-stack:** run it once per stack,
+clean per-module coverage JSON. It reads Cobertura XML (pytest-cov,
+Jest/Vitest's `cobertura` reporter), JaCoCo XML (Maven/Gradle, Kover) and
+LCOV, detecting the format itself. **Run it from the repo root** so its
+paths match the inventory's `source` paths. The coverage run must still
+write a report when tests fail — `tests_flagged_as_possible_bugs` stay
+red on purpose — so use the coverage commands in the language folder
+(`test-runner-conventions.md` §2, `jvm-build-and-location.md` §5). A
+multi-module Maven/Gradle build has one report per module: pass them all
+in one call, and the total is weighted across them. **Multi-stack:** run it once per stack,
 against that stack's own coverage output — never combine two stacks'
 coverage reports into one parse_coverage.py run, their module paths and
-tooling don't line up.
+tooling don't line up. If a stack can't produce coverage without a build
+change (no coverage provider installed, a Surefire `argLine` that drops
+the agent), record coverage as `null` with the reason rather than
+changing the build.
 
 ### Step 14 — Update the inventory and write scratch output
 
@@ -529,8 +583,16 @@ is the loading rule — they must agree.
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md` — extend, don't duplicate
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md` — read the full dependency graph first
 - `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD
-- everything under `${CLAUDE_PLUGIN_ROOT}/rules/lang/<language>/` for the detected language (for
-  example `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`)
+- the files directly inside the detected language's folder(s), per Step 1's table:
+  `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`, `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/`
+  (JS and TS), `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` plus `${CLAUDE_PLUGIN_ROOT}/rules/lang/java/`
+  or `${CLAUDE_PLUGIN_ROOT}/rules/lang/kotlin/`
+
+**Tier 1b — the framework files the stack uses** (Step 1's second table):
+- `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/react.md` — React Testing Library, user-event, hooks, providers
+- `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/nextjs.md` — route handlers, server actions, middleware, `next/*` mocks
+- `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/node-backend.md` — Express/Fastify/NestJS/Koa/Hono, ORMs, `node:test`
+- `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/frameworks/spring-boot.md` — plain unit tests first, `@WebMvcTest` slices, validation, security
 
 **Tier 2 — when the target calls for it** (Step 1's table says when):
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md` — helpers and builders over inline construction

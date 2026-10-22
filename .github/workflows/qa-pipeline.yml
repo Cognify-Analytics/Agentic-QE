@@ -54,6 +54,13 @@ on:
         required: false
         type: string
         default: ''
+      java_version:
+        description: >-
+          JDK version to set up (Temurin), e.g. '21'. Leave empty for repos with no Java/Kotlin
+          stack. Match what the build targets (maven-compiler-plugin release, Gradle toolchain).
+        required: false
+        type: string
+        default: ''
       max_turns:
         description: >-
           Turn budget for the Claude run. This is a ceiling that stops a runaway run, not
@@ -144,6 +151,13 @@ jobs:
           # packageManager. Keep v4's behaviour: setup_script owns installs.
           package-manager-cache: false
 
+      # No cache: input on purpose, same reason as above -- setup_script owns installs.
+      - uses: actions/setup-java@v5
+        if: inputs.java_version != ''
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
       - name: Install target repo dependencies
         run: ${{ inputs.setup_script }}
 
@@ -196,9 +210,13 @@ jobs:
           if [ "$HAVE_BASELINE" = false ]; then
             STRATEGY=bootstrap
           else
+            # Source files only: not tests (by folder, Gradle test source set or file
+            # name), not type declarations, stories or tool config files.
             SRC=$(printf '%s\n' "$CHANGED" \
-              | grep -Ev '(^|/)(tests?|spec|__tests__)/' \
-              | grep -E '\.(py|js|jsx|ts|tsx|java|kt|go|rb|cs|rs|php)$' || true)
+              | grep -Ev '(^|/)(tests?|spec|__tests__|__mocks__|test-utils)/' \
+              | grep -Ev '(^|/)src/(testFixtures|[a-z][A-Za-z]*Test)/' \
+              | grep -Ev '(\.(test|spec|stories)\.[cm]?[jt]sx?|\.d\.[cm]?ts|(Test|Tests|IT|Spec)\.(java|kt)|_test\.(py|go)|(^|/)test_[^/]*\.py|(^|/)conftest\.py|\.config\.[cm]?[jt]s)$' \
+              | grep -E '\.(py|js|jsx|mjs|cjs|ts|tsx|mts|cts|java|kt|go|rb|cs|rs|php)$' || true)
             if [ -z "$SRC" ]; then
               STRATEGY=triage-only
             else
@@ -221,8 +239,9 @@ jobs:
               -e '(^|/)readme' \
               -e '(^|/)docs?/' \
               -e '\.(md|rst|sql|prisma|proto|graphql)$' \
-              -e '(^|/)(migrations?|models?|schemas?|entities|domain)/' \
-              -e '(^|/)(pyproject\.toml|setup\.cfg|package\.json|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|go\.mod|Cargo\.toml|[^/]+\.csproj)$' \
+              -e '(^|/)(migrations?|models?|schemas?|entit(y|ies)|domain)/' \
+              -e '(^|/)(pyproject\.toml|setup\.cfg|package\.json|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|settings\.gradle[^/]*|libs\.versions\.toml|go\.mod|Cargo\.toml|[^/]+\.csproj)$' \
+              -e '(^|/)(application[^/]*\.(ya?ml|properties)|\.env\.example)$' \
               || true)
             [ -z "$CTX_HITS" ] && CTX_INPUTS_CHANGED=false
           fi

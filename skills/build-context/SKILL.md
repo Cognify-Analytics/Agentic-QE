@@ -103,21 +103,35 @@ stack's numbers separately rather than a single overall figure.
 ### Step 4 — Section 1: what this project does
 
 Read the README, anything under `docs/`, the manifest's description field
-(`pyproject.toml`/`package.json`/etc.), and the top-level folder layout.
+(`pyproject.toml`/`package.json`/`pom.xml`'s `<description>`/etc.), and the
+top-level folder layout.
 Cover: what it does, who uses it (mark `[inferred]` unless an audience is
 stated explicitly somewhere), and its main features.
 
 ### Step 5 — Section 2: data schema
 
 Look for migrations, `models/`, `schema.sql`, ORM definitions, or type
-files. Cover the main entities, their key fields, how they relate, and cite
+files. Where these usually live per stack:
+
+| Stack | Schema sources |
+|---|---|
+| Python | SQLAlchemy/Django models, Alembic/Django migrations, Pydantic models |
+| JS/TS | `prisma/schema.prisma`, Drizzle `schema.ts`, TypeORM `@Entity` classes, Mongoose schemas, Zod schemas, shared `types/` |
+| Java/Kotlin | JPA `@Entity` classes (`entity/`, `domain/`, `model/`), Flyway `db/migration/V*.sql`, Liquibase changelogs, records/data classes used as DTOs |
+
+Cover the main entities, their key fields, how they relate, and cite
 where you read this from. If the project has no data layer at all, say so —
 "None found." is complete and correct for a project that's genuinely
 stateless.
 
 ### Step 6 — Section 3: architecture
 
-Entry points, main modules, external services, environment variables. Same
+Entry points, main modules, external services, environment variables.
+Typical places to find them: Next.js `app/`/`pages/` routes, route handlers
+and `middleware.ts`; a Node `server.ts`/`main.ts` (Express/NestJS);
+`@SpringBootApplication` classes, `@RestController`s and
+`application*.yml|properties`; `.env.example` and `process.env.*` /
+`@Value("${...}")` references for configuration. Same
 rule: "None found." is a valid answer for any of these if the project
 genuinely has none — do not invent an entry point, a database, or an env
 var that isn't there just because the PRD's own worked example has one.

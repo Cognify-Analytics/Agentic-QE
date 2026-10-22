@@ -185,10 +185,29 @@ so Step 8 still applies even on a green suite; go there, then Step 9.
 *(Only reached when at least one stack failed — see Step 3.)*
 
 **Pull out failures with targeted searches, not by reading the whole
-file.** Grep the raw output for the framework's failure markers (`FAILED`,
-`FAIL `, `Error:`, `--- FAIL:`, `✕`, etc.) to get the list, then read only
-the surrounding block for each one — reading a 5,000-line log to find 3
-failures costs far more than 3 targeted reads.
+file.** Grep the raw output for the framework's failure markers to get the
+list, then read only the surrounding block for each one — reading a
+5,000-line log to find 3 failures costs far more than 3 targeted reads.
+
+| Framework | Failure markers to grep |
+|---|---|
+| pytest | `FAILED `, `ERROR ` (short summary at the end) |
+| Jest | `● ` (one block per failing test: `● describe › test name`), `FAIL ` (per file) |
+| Vitest | `FAIL `, `×` / `✗`, `AssertionError` |
+| node:test | `not ok `, `✖` |
+| Maven Surefire | `<<< FAILURE!`, `<<< ERROR!`, and the `[ERROR] Failures:` / `[ERROR] Errors:` summary |
+| Gradle | `> … FAILED` lines (`OrderServiceTest > createOrder_validRequest_returnsOrderId() FAILED`) |
+| Go | `--- FAIL:` |
+
+**JVM builds also write structured results**, which are more reliable than
+the console: `target/surefire-reports/*.txt` / `TEST-*.xml` (Maven) and
+`build/test-results/test/TEST-*.xml` (Gradle), one file per test class,
+with the full assertion message and stack trace of each failure. Grep
+those for `<failure`/`<error` and read only the failing class's file. A
+**compile error** in a test source (`COMPILATION ERROR`, `Compilation
+failed`, `e: file://…`) means no test ran at all in that module: record
+it as one failure against the test file that failed to compile, and
+classify it like any other.
 
 For each failing test, pull out: test name, file, error type, message, and
 stack trace/traceback. **Multi-stack:** also record which stack each
@@ -225,7 +244,10 @@ For each SIMPLE failure:
    source. This is fixing a mistake in how the test was written (a typo,
    a wrong import, a wrong fixture keyword), not re-deriving what the test
    should assert.
-3. Re-run just that test.
+3. Re-run just that test, with the single-test command for its framework
+   (`${CLAUDE_PLUGIN_ROOT}/rules/general/test-execution-verification.md`
+   lists them — `npx vitest run <file>`, `./mvnw -q test -Dtest=<Class>#<method> -Dsurefire.failIfNoSpecifiedTests=false`,
+   `./gradlew test --tests '<fqcn>.<method>'`, …). Never a watch mode.
 4. If it passes: keep the fix.
 5. If it still fails: undo the change, relabel the failure COMPLEX, and move
    on. Maximum **2 attempts** per failure before relabeling.
