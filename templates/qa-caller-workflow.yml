@@ -19,6 +19,11 @@ on:
   pull_request:
     types: [opened, ready_for_review]
     paths-ignore: ['**/*.md', 'docs/**', '.github/**']   # docs-only PRs are skipped
+  # A maintainer's reply on an issue the pipeline filed (/qa fix, /qa not-a-bug,
+  # /qa wont-fix, /qa later, or plain words) is acted on straight away, for that
+  # issue only. Other comments are filtered out before any job starts.
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       clickup_task_id:
@@ -63,6 +68,7 @@ jobs:
       # ── Optional: leave these commented out unless you need them ────────────
       # fix_bugs: true                 # also open PRs that fix real bugs (set up branch protection first)
       # clickup_branch_naming: true    # only if branch names must contain CU-<task id>
+      # reminder_days: 7               # days before an unanswered QA issue gets a "still needs attention" comment (0 = never)
       # max_turns: 200                 # raise if runs on a large repo stop early
       # model: claude-sonnet-5-5       # pin a specific Claude model
 

@@ -68,6 +68,14 @@ on:
         required: false
         type: string
         default: ''
+      reminder_days:
+        description: >-
+          Days without a maintainer reply before the pipeline comments that an open issue it
+          filed still needs attention (at most once per this many days, three times per issue).
+          0 turns reminders off.
+        required: false
+        type: number
+        default: 7
       max_turns:
         description: >-
           Turn budget for the Claude run. This is a ceiling that stops a runaway run, not
@@ -97,18 +105,30 @@ permissions:
   issues: write
 
 concurrency:
-  group: qa-pipeline-${{ github.event.pull_request.number || github.ref }}
+  # One run per PR, per followed-up issue, or per ref. Comment-triggered runs never
+  # cancel a PR run, and a second comment on the same issue supersedes the first.
+  group: qa-pipeline-${{ github.event.pull_request.number || (github.event.issue.number && format('issue-{0}', github.event.issue.number)) || github.ref }}
   cancel-in-progress: true
 
 jobs:
   qa:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # issue_comment: only a maintainer's comment on an issue this pipeline filed (not a
+    # PR comment, not a bot). Everyone else's comments never start a run -- on a public
+    # repo, a comment must not be able to make the pipeline change code. The pipeline's
+    # own comments use GITHUB_TOKEN, which never triggers workflows, so there is no loop.
     if: >
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
        github.event.pull_request.draft == false &&
-       !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
+       !contains(github.event.pull_request.labels.*.name, 'qa:skip')) ||
+      (github.event_name == 'issue_comment' &&
+       !github.event.issue.pull_request &&
+       contains(github.event.issue.labels.*.name, 'agentic-qe') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       github.event.comment.user.type != 'Bot') ||
+      (github.event_name != 'pull_request' && github.event_name != 'issue_comment')
     steps:
       - name: Check out the target repo
         uses: actions/checkout@v5
@@ -181,6 +201,9 @@ jobs:
           HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
           CLICKUP: ${{ inputs.clickup_branch_naming }}
           CLICKUP_TASK_ID: ${{ inputs.clickup_task_id }}
+          EVENT: ${{ github.event_name }}
+          FOLLOWUP_ISSUE: ${{ github.event.issue.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           mkdir -p .claude-pipeline
@@ -213,8 +236,11 @@ jobs:
           fi
 
           # --- Strategy: what should /generate-tests do? ---
+          # A maintainer's reply on a pipeline issue only needs that issue followed up.
           TARGETS='[]'
-          if [ "$HAVE_BASELINE" = false ]; then
+          if [ "$EVENT" = issue_comment ]; then
+            STRATEGY=follow-up-only
+          elif [ "$HAVE_BASELINE" = false ]; then
             STRATEGY=bootstrap
           else
             # Source files only: not tests (by folder, Gradle test source set or file
@@ -267,12 +293,16 @@ jobs:
             --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
             --argjson ctx_changed "$CTX_INPUTS_CHANGED" \
             --argjson branch_naming "$BRANCH_NAMING" \
+            --argjson followup_issue "${FOLLOWUP_ISSUE:-null}" \
+            --argjson reminder_days "${{ inputs.reminder_days }}" \
+            --arg default_branch "$DEFAULT_BRANCH" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
             { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
               branch_naming:$branch_naming,
-              ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
-                    strategy:$strategy, targets:$targets,
-                    context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
+              followup: { reminder_days:$reminder_days },
+              ci: { pr_number:$pr, pr_base_branch:$branch, default_branch:$default_branch,
+                    run_url:$run_url, strategy:$strategy, targets:$targets,
+                    context_inputs_changed:$ctx_changed, followup_issue:$followup_issue } }' > .claude-pipeline/run.json
 
           cat .claude-pipeline/run.json
 

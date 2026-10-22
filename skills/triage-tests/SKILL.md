@@ -298,16 +298,29 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
    the template's own title convention, if any). This is what makes a
    re-run idempotent — a run's issue for the same failure must always
    produce the same title.
-3. **Look for an existing open issue first**, GitHub MCP server if
-   available, otherwise the `gh` CLI (`gh issue list --search ...`) —
-   search on the fingerprint from step 2, not just free-text keywords. If
-   one clearly matches this failure, comment on it instead of opening a new
-   one — this is what keeps a re-triggered run (e.g. `workflow_dispatch` on
-   the same PR) from filing a duplicate every time.
+3. **Look for an existing pipeline issue first, open or closed**, GitHub MCP
+   server if available, otherwise the `gh` CLI
+   (`gh issue list --label agentic-qe --state all --search "<fingerprint> in:title" --json number,state,stateReason,labels,url`).
+   Search on the fingerprint from step 2, not on free-text keywords. A
+   maintainer may already have decided this failure on that issue
+   (`${CLAUDE_PLUGIN_ROOT}/rules/issue-follow-up.md` §10):
+   - **Open:** don't open a new one, and don't comment unless the failure
+     *message* differs from the one the issue already shows (reminders are
+     `/follow-up-issues`' job). This is what keeps a re-triggered run from
+     filing a duplicate, or a comment, every time.
+   - **Closed with `qa:not-a-bug` or `qa:wont-fix`:** file nothing. Record
+     the failure in `acknowledged` with the issue and the decision. If the
+     test still asserts the rejected expectation, the decision PR isn't
+     merged yet; say so in the entry.
+   - **Closed as completed, and failing again:** a regression. Reopen it
+     (`gh issue reopen`) with a comment naming this sha and the failure,
+     instead of filing a new issue.
 4. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
    filling in the fingerprinted title, the failure output, the relevant
    excerpt of `.qa/context.md` (or whatever you used in its absence, per
-   Step 1), and the resolved owners if any.
+   Step 1), and the resolved owners if any. Keep its `agentic-qe:issue`
+   marker and its reply menu: they are how a maintainer's answer gets
+   acted on at the next run (`/follow-up-issues`).
 5. **Report-only mode (default):** do not actually call the GitHub MCP
    server or `gh` — write the fully-drafted issue/comment content into
    `03-triage.json`'s `issues_created`/`issues_commented` and show it on
@@ -315,7 +328,10 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
    `gh issue comment` — with `--repo` set to the local repo when running
-   locally, per Step 0) and record the real URL. Then assign it to the
+   locally, per Step 0), with the `agentic-qe` label (create it first if
+   the repo doesn't have it: `gh label create agentic-qe --color 5319e7
+   --description "Filed by the Agentic QE pipeline" --force`), and record
+   the real URL. Then assign it to the
    code owners, per "Assigning CODEOWNERS" below. When you commented on an
    existing issue instead, add any of this run's assignees it doesn't
    already have — an issue nobody is assigned to is the one that sits.
@@ -557,11 +573,18 @@ gitignored, not committed.
   "issues_commented": [],
   "bug_fix_prs_created": [],
   "branch_naming_problem": null,
+  "acknowledged": [],
   "tooling_gaps": [],
   "escalated": [],
   "caps_hit": []
 }
 ```
+
+`acknowledged` lists failures a maintainer already decided on a closed
+issue, so no issue was filed:
+`{ "test": "...", "file": "...", "issue": 12, "decision": "wont-fix", "note": "decision PR #34 not merged yet" }`.
+Report-only runs never query GitHub, so they can't see decisions and
+leave this `[]`; their drafted issues may duplicate a decided one.
 
 `tooling_gaps` uses the same entry shape as `/generate-tests`' inventory
 field (`stack`, `tool`, `needed_for`, `version`, `evidence`, `effect`,

@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.2.0**, under active development. All four skills and the
+Version **0.2.0**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -21,7 +21,8 @@ for the CI design.
 | `/agentic-qe:generate-tests [file or folder]` | Generate unit tests for a target, matching the repo's own conventions |
 | `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview, and `.qa/github-action-qa-pipeline-template.yml`, the CI workflow with this repo's setup already filled in |
 | `/agentic-qe:triage-tests [--live] [--fix-bugs]` | Run the suite, classify each failure as a bad test or a real bug, fix what's safe, file issues for the rest |
-| `/agentic-qe:test-pipeline [--live] [--fix-bugs] [file or folder]` | Run all three in sequence, end to end |
+| `/agentic-qe:follow-up-issues [--live] [--issue N]` | Act on maintainers' replies to the issues the pipeline filed: fix, close as not a bug, mark won't-fix, answer, or remind |
+| `/agentic-qe:test-pipeline [--live] [--fix-bugs] [file or folder]` | Run them all in sequence, end to end (follow-up first) |
 
 | Flag | Effect |
 |---|---|
@@ -582,6 +583,36 @@ turning it on for real. Make sure branch protection with required human
 review is in place first — a bug-fix PR changes production code, not just
 tests.
 
+### Replying to the pipeline's issues
+
+The pipeline never decides a suspected bug on its own. It files an issue
+and changes nothing. You decide by replying on the issue, and the pipeline
+carries out the decision:
+
+| You reply | The pipeline |
+|---|---|
+| `/qa fix` (optionally how it should behave), or "yes, please fix this" | Opens a PR fixing the code, with the same limits as `fix_bugs` (at most 2 files, verified against the whole suite). You review and merge it. The issue closes itself once the test passes on the default branch |
+| `/qa not-a-bug` (optionally why, and what's correct), or "this is intended" | Updates its own test to the behaviour you confirmed (in a PR), and closes the issue. It names any doc that still says otherwise |
+| `/qa wont-fix`, or "known issue, we accept it" | Keeps the test as a known failure linked to the issue (`xfail(strict=True)`, `test.failing`, `@Disabled`, …) and closes the issue. If the bug is ever fixed, that test turns red to tell you |
+| `/qa later` | Pauses reminders for 30 days |
+| A question | Answers it from the failure, the code and the docs |
+| Anything it isn't sure about | Asks you to pick, rather than guessing |
+| Nothing for `reminder_days` (default 7) | Comments that the issue still needs attention, with the current failure. At most 3 times, then labels it `qa:needs-triage` |
+
+- **Only replies from people with write access count** (owner, member,
+  collaborator). Anyone else's comments are ignored for decisions.
+- **Replies are acted on right away** in CI: the caller workflow listens
+  for comments on `agentic-qe` issues and runs the follow-up for that one
+  issue only. Every normal pipeline run also follows up all open issues
+  first. Locally, `/agentic-qe:follow-up-issues --live` does the same.
+- **It needs `live: true`** to comment, close or open PRs. In report-only
+  mode it drafts what it would do, in `.claude-pipeline/00-followup.json`.
+- **Decided issues stay decided.** Triage won't refile a failure whose
+  issue was closed as not-a-bug or won't-fix, and it reopens an issue
+  whose bug comes back after it was fixed.
+
+The rules are in `rules/issue-follow-up.md`.
+
 ### ClickUp branch naming — opt-in
 
 Some repos only allow branch names that carry a ClickUp task ID, such as
@@ -793,7 +824,7 @@ python scripts/render_trace.py run.jsonl --out trace.md
 ## Project layout
 
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
-- `skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
+- `skills/` — the five skills (`follow-up-issues`, `generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
 - `rules/` — the single shared source of testing rules and conventions, read by the skills:
   `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage, `context-file-template.md` and `qa-workflow-template.md` for the two files `/build-context` writes
 - `templates/` — the GitHub issue and bug-fix PR templates, and the generic caller workflow to copy into a target repo (`/build-context` also writes a copy tuned to the repo, in `.qa/`)
