@@ -54,6 +54,28 @@ on:
         required: false
         type: string
         default: ''
+      python_version:
+        description: >-
+          Python version to set up. Python is always set up (the pipeline's own scripts need
+          3.9 or newer); change it only if the target repo needs a different one.
+        required: false
+        type: string
+        default: '3.12'
+      java_version:
+        description: >-
+          JDK version to set up (Temurin), e.g. '21'. Leave empty for repos with no Java/Kotlin
+          stack. Match what the build targets (maven-compiler-plugin release, Gradle toolchain).
+        required: false
+        type: string
+        default: ''
+      reminder_days:
+        description: >-
+          Days without a maintainer reply before the pipeline comments that an open issue it
+          filed still needs attention (at most once per this many days, three times per issue).
+          0 turns reminders off.
+        required: false
+        type: number
+        default: 7
       max_turns:
         description: >-
           Turn budget for the Claude run. This is a ceiling that stops a runaway run, not
@@ -83,18 +105,30 @@ permissions:
   issues: write
 
 concurrency:
-  group: qa-pipeline-${{ github.event.pull_request.number || github.ref }}
+  # One run per PR, per followed-up issue, or per ref. Comment-triggered runs never
+  # cancel a PR run, and a second comment on the same issue supersedes the first.
+  group: qa-pipeline-${{ github.event.pull_request.number || (github.event.issue.number && format('issue-{0}', github.event.issue.number)) || github.ref }}
   cancel-in-progress: true
 
 jobs:
   qa:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # issue_comment: only a maintainer's comment on an issue this pipeline filed (not a
+    # PR comment, not a bot). Everyone else's comments never start a run -- on a public
+    # repo, a comment must not be able to make the pipeline change code. The pipeline's
+    # own comments use GITHUB_TOKEN, which never triggers workflows, so there is no loop.
     if: >
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
        github.event.pull_request.draft == false &&
-       !contains(github.event.pull_request.labels.*.name, 'qa:skip'))
+       !contains(github.event.pull_request.labels.*.name, 'qa:skip')) ||
+      (github.event_name == 'issue_comment' &&
+       !github.event.issue.pull_request &&
+       contains(github.event.issue.labels.*.name, 'agentic-qe') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+       github.event.comment.user.type != 'Bot') ||
+      (github.event_name != 'pull_request' && github.event_name != 'issue_comment')
     steps:
       - name: Check out the target repo
         uses: actions/checkout@v5
@@ -134,7 +168,7 @@ jobs:
       # need it even when the target repo has no Python stack of its own.
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: ${{ inputs.python_version }}
 
       - uses: actions/setup-node@v5
         if: inputs.node_version != ''
@@ -143,6 +177,13 @@ jobs:
           # v5 turns on dependency caching by itself when package.json names a
           # packageManager. Keep v4's behaviour: setup_script owns installs.
           package-manager-cache: false
+
+      # No cache: input on purpose, same reason as above -- setup_script owns installs.
+      - uses: actions/setup-java@v5
+        if: inputs.java_version != ''
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
 
       - name: Install target repo dependencies
         run: ${{ inputs.setup_script }}
@@ -160,6 +201,9 @@ jobs:
           HEAD_BRANCH: ${{ github.head_ref || github.ref_name }}
           CLICKUP: ${{ inputs.clickup_branch_naming }}
           CLICKUP_TASK_ID: ${{ inputs.clickup_task_id }}
+          EVENT: ${{ github.event_name }}
+          FOLLOWUP_ISSUE: ${{ github.event.issue.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           mkdir -p .claude-pipeline
@@ -192,13 +236,20 @@ jobs:
           fi
 
           # --- Strategy: what should /generate-tests do? ---
+          # A maintainer's reply on a pipeline issue only needs that issue followed up.
           TARGETS='[]'
-          if [ "$HAVE_BASELINE" = false ]; then
+          if [ "$EVENT" = issue_comment ]; then
+            STRATEGY=follow-up-only
+          elif [ "$HAVE_BASELINE" = false ]; then
             STRATEGY=bootstrap
           else
+            # Source files only: not tests (by folder, Gradle test source set or file
+            # name), not type declarations, stories or tool config files.
             SRC=$(printf '%s\n' "$CHANGED" \
-              | grep -Ev '(^|/)(tests?|spec|__tests__)/' \
-              | grep -E '\.(py|js|jsx|ts|tsx|java|kt|go|rb|cs|rs|php)$' || true)
+              | grep -Ev '(^|/)(tests?|spec|__tests__|__mocks__|test-utils)/' \
+              | grep -Ev '(^|/)src/(testFixtures|[a-z][A-Za-z]*Test)/' \
+              | grep -Ev '(\.(test|spec|stories)\.[cm]?[jt]sx?|\.d\.[cm]?ts|(Test|Tests|IT|Spec)\.(java|kt)|_test\.(py|go)|(^|/)test_[^/]*\.py|(^|/)conftest\.py|\.config\.[cm]?[jt]s)$' \
+              | grep -E '\.(py|js|jsx|mjs|cjs|ts|tsx|mts|cts|java|kt|go|rb|cs|rs|php)$' || true)
             if [ -z "$SRC" ]; then
               STRATEGY=triage-only
             else
@@ -209,8 +260,9 @@ jobs:
 
           # --- Can Stage 2 (/build-context) be skipped entirely? ---
           # Sections 1-3 of context.md are derived only from docs, manifests and schema
-          # files. If none of those changed, those sections cannot have changed either,
-          # so regenerating them just to diff them is pure spend. Section 4 (coverage)
+          # files, and the repo-tuned workflow template only from manifests, runtime
+          # version files and the repo's own CI. If none of those changed, neither
+          # output can have changed, so regenerating them just to diff them is pure spend. Section 4 (coverage)
           # is handled by the orchestrator, which also requires that Stage 1 left the
           # inventory alone before it acts on this flag.
           # Deliberately conservative: unless we have a real base diff proving nothing
@@ -221,8 +273,11 @@ jobs:
               -e '(^|/)readme' \
               -e '(^|/)docs?/' \
               -e '\.(md|rst|sql|prisma|proto|graphql)$' \
-              -e '(^|/)(migrations?|models?|schemas?|entities|domain)/' \
-              -e '(^|/)(pyproject\.toml|setup\.cfg|package\.json|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|go\.mod|Cargo\.toml|[^/]+\.csproj)$' \
+              -e '(^|/)(migrations?|models?|schemas?|entit(y|ies)|domain)/' \
+              -e '(^|/)(pyproject\.toml|setup\.cfg|package\.json|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|settings\.gradle[^/]*|libs\.versions\.toml|go\.mod|Cargo\.toml|[^/]+\.csproj)$' \
+              -e '(^|/)(application[^/]*\.(ya?ml|properties)|\.env\.example)$' \
+              -e '(^|/)(\.nvmrc|\.node-version|\.python-version|\.java-version|\.tool-versions|\.sdkmanrc|pnpm-workspace\.yaml|\.yarnrc\.yml)$' \
+              -e '^\.github/workflows/' \
               || true)
             [ -z "$CTX_HITS" ] && CTX_INPUTS_CHANGED=false
           fi
@@ -238,12 +293,16 @@ jobs:
             --argjson fix_bugs "${{ inputs.fix_bugs && 'true' || 'false' }}" \
             --argjson ctx_changed "$CTX_INPUTS_CHANGED" \
             --argjson branch_naming "$BRANCH_NAMING" \
+            --argjson followup_issue "${FOLLOWUP_ISSUE:-null}" \
+            --argjson reminder_days "${{ inputs.reminder_days }}" \
+            --arg default_branch "$DEFAULT_BRANCH" \
             --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" '
             { sha:$sha, branch:$branch, timestamp:$ts, mode:"ci", live:$live, fix_bugs:$fix_bugs,
               branch_naming:$branch_naming,
-              ci: { pr_number:$pr, pr_base_branch:$branch, run_url:$run_url,
-                    strategy:$strategy, targets:$targets,
-                    context_inputs_changed:$ctx_changed } }' > .claude-pipeline/run.json
+              followup: { reminder_days:$reminder_days },
+              ci: { pr_number:$pr, pr_base_branch:$branch, default_branch:$default_branch,
+                    run_url:$run_url, strategy:$strategy, targets:$targets,
+                    context_inputs_changed:$ctx_changed, followup_issue:$followup_issue } }' > .claude-pipeline/run.json
 
           cat .claude-pipeline/run.json
 
@@ -275,6 +334,9 @@ jobs:
 
       # Cost/turn telemetry. Deliberately never fails the job — a missing or
       # reshaped execution log costs us a data point, not a run.
+      # Built by scripts/collect_telemetry.py, the same script a local run uses
+      # (scripts/run_local.py, or /test-pipeline's own Finish step), so a CI run and
+      # a local run produce the same telemetry.json and the same summary block.
       - name: Collect telemetry
         id: telemetry
         if: always()
@@ -286,89 +348,34 @@ jobs:
           # This step runs on always(), so it can be reached even if the plan step
           # (which normally creates this) never got there.
           mkdir -p .claude-pipeline
-
-          # An earlier step failing (dependency setup is the usual one) skips the
-          # pipeline entirely. Reporting "$n/a over n/a turns" for that reads like a
-          # run that happened and cost nothing, which is worse than saying nothing.
-          if [ -z "${CLAUDE_OUTCOME}" ] || [ "${CLAUDE_OUTCOME}" = "skipped" ]; then
-            echo "The pipeline never ran — an earlier step failed. No telemetry to collect."
-            printf '%s\n' '{"schema_version":1,"conclusion":"did-not-run"}' > .claude-pipeline/telemetry.json
-            { echo "### Agentic QE"
-              echo
-              echo "The pipeline did not run: a step before it failed — most often \`setup_script\` not matching the repo's layout. See the job log."
-            } >> "$GITHUB_STEP_SUMMARY" || true
-            exit 0
-          fi
-
-          # Search the execution log recursively for the object carrying cost, rather
-          # than assuming a fixed position/shape, so an action upgrade can't break this.
-          RESULT='{}'
           if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
-            RESULT=$(jq -c '[.. | objects | select(has("total_cost_usd"))] | last // {}' \
-                     "$EXEC_FILE" 2>/dev/null || echo '{}')
             cp "$EXEC_FILE" .claude-pipeline/execution-log.json 2>/dev/null || true
           fi
 
-          # Per-stage outcomes, written by /test-pipeline. This is what proves whether
-          # a stage was actually skipped rather than just quietly cheap.
-          STAGES=$(jq -c '.' .claude-pipeline/stages.json 2>/dev/null || echo 'null')
-          RUN=$(jq -c '.' .claude-pipeline/run.json 2>/dev/null || echo '{}')
+          # The plugin checkout itself failed: there is no script to run. Say the
+          # pipeline didn't run rather than reporting a run that "cost nothing".
+          if [ ! -f .agentic-qe/scripts/collect_telemetry.py ]; then
+            echo '{"schema_version":1,"source":"ci","conclusion":"did-not-run"}' > .claude-pipeline/telemetry.json
+            echo "### Agentic QE" >> "$GITHUB_STEP_SUMMARY" || true
+            echo "The pipeline did not run: the Agentic QE plugin could not be checked out. See the job log." >> "$GITHUB_STEP_SUMMARY" || true
+            exit 0
+          fi
 
-          jq -n \
-            --argjson result "$RESULT" \
-            --argjson stages "$STAGES" \
-            --argjson run "$RUN" \
-            --arg repo "${{ github.repository }}" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --arg conclusion "${{ steps.claude.outcome }}" \
-            --arg model "${{ inputs.model || 'action-default' }}" \
-            --argjson max_turns "${{ inputs.max_turns }}" '
-            { schema_version: 1,
-              repo: $repo, run_id: $run_id, run_url: $run_url,
-              conclusion: $conclusion,
-              sha:      ($run.sha      // null),
-              branch:   ($run.branch    // null),
-              timestamp:($run.timestamp // null),
-              pr_number:($run.ci.pr_number // null),
-              strategy: ($run.ci.strategy  // null),
-              context_inputs_changed: ($run.ci.context_inputs_changed // null),
-              live:     ($run.live     // null),
-              fix_bugs: ($run.fix_bugs // null),
-              model: $model,
-              max_turns: $max_turns,
-              cost_usd:    ($result.total_cost_usd // null),
-              num_turns:   ($result.num_turns      // null),
-              duration_ms: ($result.duration_ms    // null),
-              usage:       ($result.usage          // {}),
-              stages: $stages }' > .claude-pipeline/telemetry.json 2>/dev/null \
-            || echo '{"schema_version":1,"error":"telemetry assembly failed"}' > .claude-pipeline/telemetry.json
-
-          COST=$(jq -r '.cost_usd  // "n/a"' .claude-pipeline/telemetry.json)
-          TURNS=$(jq -r '.num_turns // "n/a"' .claude-pipeline/telemetry.json)
-          STRAT=$(jq -r '.strategy  // "n/a"' .claude-pipeline/telemetry.json)
-
-          { echo "### Agentic QE — run cost"
-            echo
-            echo "| Metric | Value |"
-            echo "|---|---|"
-            echo "| Cost (USD) | \`$COST\` |"
-            echo "| Turns | \`$TURNS\` |"
-            echo "| Strategy | \`$STRAT\` |"
-            echo "| Model | \`${{ inputs.model || 'action-default' }}\` |"
-            echo
-            echo "<details><summary>Full telemetry JSON</summary>"
-            echo
-            echo '```json'
-            cat .claude-pipeline/telemetry.json
-            echo '```'
-            echo
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY" || true
-
-          echo "cost=$COST"   >> "$GITHUB_OUTPUT"
-          echo "turns=$TURNS" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Agentic QE cost::\$$COST over $TURNS turns (strategy: $STRAT)"
+          # An empty or "skipped" outcome means an earlier step failed (dependency
+          # setup is the usual one); the script then records did-not-run.
+          python .agentic-qe/scripts/collect_telemetry.py \
+            --execution-file "${EXEC_FILE:-}" \
+            --source ci \
+            --outcome "${CLAUDE_OUTCOME}" \
+            --pipeline-dir .claude-pipeline \
+            --repo "${{ github.repository }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --model "${{ inputs.model || 'action-default' }}" \
+            --max-turns "${{ inputs.max_turns }}" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github || true
           exit 0
 
       # The readable half of the execution log: what the agent did stage by stage,

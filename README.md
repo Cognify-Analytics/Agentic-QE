@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.2.0**, under active development. All four skills and the
+Version **0.2.0**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -19,9 +19,10 @@ for the CI design.
 | Command | What it does |
 |---|---|
 | `/agentic-qe:generate-tests [file or folder]` | Generate unit tests for a target, matching the repo's own conventions |
-| `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview |
+| `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview, and `.qa/github-action-qa-pipeline-template.yml`, the CI workflow with this repo's setup already filled in |
 | `/agentic-qe:triage-tests [--live] [--fix-bugs]` | Run the suite, classify each failure as a bad test or a real bug, fix what's safe, file issues for the rest |
-| `/agentic-qe:test-pipeline [--live] [--fix-bugs] [file or folder]` | Run all three in sequence, end to end |
+| `/agentic-qe:follow-up-issues [--live] [--issue N]` | Act on maintainers' replies to the issues the pipeline filed: fix, close as not a bug, mark won't-fix, answer, or remind |
+| `/agentic-qe:test-pipeline [--live] [--fix-bugs] [file or folder]` | Run them all in sequence, end to end (follow-up first) |
 
 | Flag | Effect |
 |---|---|
@@ -29,6 +30,40 @@ for the CI design.
 | `--live` | Actually file issues and open PRs (see [Filing issues and PRs from your machine](#filing-issues-and-prs-from-your-machine)) |
 | `--clickup-branches` | Opt-in. Names every branch the pipeline pushes after your branch's ClickUp task ID (see [ClickUp branch naming](#clickup-branch-naming--opt-in)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
+
+## Supported languages
+
+The pipeline works out a repo's language and test setup from its manifest
+files, and never assumes one. Every language gets the shared rules in
+`rules/general/`. Four languages also have their own rules folder:
+
+| Language | Rules | Test frameworks | Framework-specific rules | Coverage read from |
+|---|---|---|---|---|
+| Python | `rules/lang/python/` | pytest | — | pytest-cov (Cobertura) |
+| JavaScript / TypeScript | `rules/lang/javascript/` | Jest, Vitest, `node:test` | React, Next.js (App and Pages Router), Node backends (Express, Fastify, NestJS, Koa, Hono) | Cobertura or LCOV (Jest, Vitest, c8, `node --test`) |
+| Java | `rules/lang/jvm/` + `rules/lang/java/` | JUnit 5 (JUnit 4 when that's all there is), AssertJ, Mockito | Spring Boot | JaCoCo (Maven, Gradle) |
+| Kotlin | `rules/lang/jvm/` + `rules/lang/kotlin/` | JUnit 5, Kotest, MockK (or Mockito via mockito-kotlin), coroutines | Spring Boot | JaCoCo or Kover |
+
+Go, C#, Rust, Ruby, PHP, Elixir, Scala and Swift are detected and get
+the general rules, their default test location and their build commands,
+but no language-specific rules yet.
+
+The pipeline never edits a manifest or build file. Whatever the tests need
+(Jest or Vitest, `@testing-library/*`, `junit-jupiter`, Mockito or MockK,
+a coverage provider) must already be in the repo. If something is missing,
+the run says exactly what, and skips the modules that need it.
+
+**To see what your repo needs**, open section 5, "Test tooling
+requirements", of `.qa/context.md` (written by `/agentic-qe:build-context`).
+For each stack it lists every tool the pipeline needs, whether the repo
+has it, and the version that fits the repo. For example,
+`@vitest/coverage-v8` must be exactly your installed `vitest` version, and
+`jest-environment-jsdom` the same major as `jest`. Under the table is a
+ready-to-paste install command, for Windows PowerShell first and then
+macOS/Linux. Gaps a run actually hit (such as a coverage run that failed
+because the provider wasn't installed) are listed there too, and in the
+"Needs a human" part of the run summary. Install them once, commit the
+manifest and lockfile, and every later run, local or CI, has them.
 
 ## Install
 
@@ -266,8 +301,8 @@ changed file into one of these groups:
 | Group | Examples | Result |
 |---|---|---|
 | Pipeline output | `.qa/`, `.claude-pipeline/` | ✅ Allowed |
-| Tests | Anything in a `tests/`, `test/`, `spec/`, `__tests__/` or `src/test/` folder; files named `test_x.py`, `x.test.ts`, `x.spec.js`, `x_test.go`, `FooTest.java`, `conftest.py` | ✅ Allowed, including tests that sit next to the code (`src/lib/format.test.ts`) |
-| Test-run by-products | `coverage.xml`, `.coverage`, `coverage/`, `htmlcov/`, `__pycache__/`, `.venv/` | ✅ Ignored. Only counts for new, untracked files, and they're never committed |
+| Tests | Anything in a `tests/`, `test/`, `spec/`, `__tests__/`, `test-utils/` or `src/test/` folder, or a Gradle test source set (`src/testFixtures/`, `src/jvmTest/`); files named `test_x.py`, `x.test.ts`, `x.spec.js`, `x_test.go`, `FooTest.java`, `FooTest.kt`, `conftest.py`, `test-utils.tsx` | ✅ Allowed, including tests that sit next to the code (`src/lib/format.test.ts`) |
+| Test-run by-products | `coverage.xml`, `.coverage`, `coverage/`, `htmlcov/`, `__pycache__/`, `.venv/`, `target/`, `build/`, `.gradle/`, `.next/`, `*.tsbuildinfo` | ✅ Ignored. Only counts for new, untracked files, and they're never committed |
 | Already changed before Claude started | A lock file rewritten by `setup_script` | ✅ Not judged. A snapshot is taken just before Claude runs |
 | Anything else | Production source, config, lock files | ❌ The job fails |
 
@@ -365,19 +400,31 @@ underscores. Then delete the copies you pasted somewhere in steps 2 and 3.
 
 #### Step 5 — Add the pipeline file to the target repo
 
-1. Open [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
+1. **If the target repo has a `.qa/github-action-qa-pipeline-template.yml`**
+   (`/agentic-qe:build-context` writes it, so it's there after any local
+   or CI run), copy that file. It's the same workflow with the repo's setup
+   already worked out: one install block per stack (backend, frontend, …)
+   and the right Node/Java/Python versions, each line commented with the
+   file it came from. Otherwise open
+   [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
    in this repo and copy all of its contents. The **Copy raw file** button
    at the top right of the file does this in one click.
 2. In the target repo, click **Add file → Create new file**.
 3. In the file name box, type exactly `.github/workflows/qa.yml`. The
    slashes create the folders for you.
 4. Paste the contents.
-5. **Ask a developer on that repo to edit the `setup_script` part.** It's
+5. **Ask a developer on that repo to check the `setup_script` part.** It's
    the list of commands that install the repo's software, it's different
    for every repo, and getting it wrong is the most common reason a first
-   run fails. Leave everything else as it is. In particular, keep
-   `live: false` for now, so the pipeline only reports and doesn't file
-   anything yet.
+   run fails. With the generated template they only need to review it,
+   and fix any line that says "replace this line" (a stack it couldn't
+   work out). With the generic template they write it themselves, and for
+   a JavaScript/TypeScript repo also uncomment `node_version`, for
+   Java/Kotlin `java_version`, set to the version the project builds with.
+   Leave everything else as it is. In particular, keep `live: false` for
+   now, so the pipeline only reports and doesn't file anything yet.
+   `fix_bugs`, `model` and the other options in STEP 2 can be set later in
+   your copy, whenever you want them.
 6. Click **Commit changes**. If GitHub asks, choose to create a new branch
    and open a pull request, then get it approved and merged as usual.
 
@@ -536,6 +583,36 @@ turning it on for real. Make sure branch protection with required human
 review is in place first — a bug-fix PR changes production code, not just
 tests.
 
+### Replying to the pipeline's issues
+
+The pipeline never decides a suspected bug on its own. It files an issue
+and changes nothing. You decide by replying on the issue, and the pipeline
+carries out the decision:
+
+| You reply | The pipeline |
+|---|---|
+| `/qa fix` (optionally how it should behave), or "yes, please fix this" | Opens a PR fixing the code, with the same limits as `fix_bugs` (at most 2 files, verified against the whole suite). You review and merge it. The issue closes itself once the test passes on the default branch |
+| `/qa not-a-bug` (optionally why, and what's correct), or "this is intended" | Updates its own test to the behaviour you confirmed (in a PR), and closes the issue. It names any doc that still says otherwise |
+| `/qa wont-fix`, or "known issue, we accept it" | Keeps the test as a known failure linked to the issue (`xfail(strict=True)`, `test.failing`, `@Disabled`, …) and closes the issue. If the bug is ever fixed, that test turns red to tell you |
+| `/qa later` | Pauses reminders for 30 days |
+| A question | Answers it from the failure, the code and the docs |
+| Anything it isn't sure about | Asks you to pick, rather than guessing |
+| Nothing for `reminder_days` (default 7) | Comments that the issue still needs attention, with the current failure. At most 3 times, then labels it `qa:needs-triage` |
+
+- **Only replies from people with write access count** (owner, member,
+  collaborator). Anyone else's comments are ignored for decisions.
+- **Replies are acted on right away** in CI: the caller workflow listens
+  for comments on `agentic-qe` issues and runs the follow-up for that one
+  issue only. Every normal pipeline run also follows up all open issues
+  first. Locally, `/agentic-qe:follow-up-issues --live` does the same.
+- **It needs `live: true`** to comment, close or open PRs. In report-only
+  mode it drafts what it would do, in `.claude-pipeline/00-followup.json`.
+- **Decided issues stay decided.** Triage won't refile a failure whose
+  issue was closed as not-a-bug or won't-fix, and it reopens an issue
+  whose bug comes back after it was fixed.
+
+The rules are in `rules/issue-follow-up.md`.
+
 ### ClickUp branch naming — opt-in
 
 Some repos only allow branch names that carry a ClickUp task ID, such as
@@ -675,7 +752,7 @@ those runs it skips work rather than doing it cheaply.
 | Situation | Effect |
 |---|---|
 | PR changes no source file (`strategy: triage-only`) | `/generate-tests` is never invoked — the orchestrator writes its completion record directly instead of forking a subagent that would load ~15k tokens of rules to do nothing |
-| No doc/manifest/schema file changed, and no new tests were written | `/build-context` is never invoked — it would otherwise regenerate all four sections from the whole repo just to discover nothing changed |
+| No doc/manifest/schema file changed, and no new tests were written | `/build-context` is never invoked — it would otherwise regenerate every section from the whole repo just to discover nothing changed |
 | Test suite passes cleanly | `/triage-tests` reads only the totals, never the full output — the raw log is still saved for the artifact |
 
 The first two depend on the PR diff the workflow computes, so they apply
@@ -697,9 +774,50 @@ It's surfaced in three places:
 
 The committed run record in `.qa/runs/<date>-<sha>.json` carries the
 strategy and per-stage outcomes too, locally and in CI. Join it to a
-`telemetry.json` on `sha` to get the full picture — the cost figures can
-only come from the CI side, since a run has no way to observe its own token
-spend from inside.
+`telemetry.json` on `sha` to get the full picture.
+
+### Local runs get the same telemetry and summaries
+
+A local run writes the same files CI does, built by the same scripts
+(`collect_telemetry.py`, `render_trace.py`), into `.claude-pipeline/`:
+
+| Local file | CI equivalent |
+|---|---|
+| `telemetry.json` (+ one copy per run in `telemetry-history/`) | the `qa-telemetry-<run_id>` artifact |
+| `run-summary.md` | the job summary page: run-cost table, then "what the agent did" |
+| `trace.md` | `trace.md` in the run artifact |
+| `summary.md` | the sticky PR comment |
+| `execution-log.json` | the raw log in the run artifact |
+
+There are two ways to run locally:
+
+- **Inside a Claude Code session** (`/agentic-qe:test-pipeline`): the
+  pipeline builds these files itself at the end. The log is cut from the
+  session's own transcript (`scripts/local_run_log.py`), so turns, tokens,
+  duration and the full timeline match CI. **Cost shows `n/a`**, because
+  session transcripts record tokens but not cost. `/cost` in the session
+  shows the session's total.
+- **Headless, exactly like CI, with cost**: run from the target repo's root.
+
+  ```powershell
+  # Windows PowerShell
+  py <path-to-agentic-qe>\scripts\run_local.py --live
+  ```
+  ```bash
+  # macOS / Linux / Git Bash
+  python <path-to-agentic-qe>/scripts/run_local.py --live
+  ```
+
+  It runs `claude -p "/agentic-qe:test-pipeline …" --output-format
+  stream-json` with CI's tool allowlist and turn limit, prints one line per
+  step as it goes, then builds every file in the table, cost included.
+  Arguments it doesn't recognise (`--live`, `--fix-bugs`, a target path)
+  are passed to the pipeline. `--max-turns`, `--model` and `--plugin-dir`
+  work like the CI inputs.
+
+Every `telemetry.json` has a `source` field (`ci`, `local-headless` or
+`local-interactive`), and a `cost_source` that says where the cost came
+from, or why it's missing.
 
 **If you want to tune further:** the `model` input sets `--model` for the
 whole pipeline. Measure before reaching for it — an Opus→Sonnet swap
@@ -736,28 +854,31 @@ section called **"Agentic QE — what the agent did"**:
 The full version, with untruncated commentary, command output, and each
 stage's closing report, is `trace.md` in the `qa-pipeline-<run_id>`
 artifact, next to the raw `execution-log.json` it is built from.
-`scripts/render_trace.py` builds both versions. It also renders a local
-headless run:
-
-```
-claude -p '/agentic-qe:test-pipeline' --output-format stream-json --verbose > run.jsonl
-python scripts/render_trace.py run.jsonl --out trace.md
-```
+`scripts/render_trace.py` builds both versions. A local run writes the
+same two, as `.claude-pipeline/run-summary.md` and
+`.claude-pipeline/trace.md` (see [Local runs get the same telemetry and
+summaries](#local-runs-get-the-same-telemetry-and-summaries)). The
+timeline also lists Stage 0's follow-up decisions and any missing test
+tooling.
 
 ## Project layout
 
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
-- `skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
-- `rules/` — the single shared source of testing rules and conventions, read by the skills
-- `templates/` — the GitHub issue and bug-fix PR templates, and the caller workflow to copy into a target repo
+- `skills/` — the five skills (`follow-up-issues`, `generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
+- `rules/` — the single shared source of testing rules and conventions, read by the skills:
+  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage, `context-file-template.md` and `qa-workflow-template.md` for the two files `/build-context` writes
+- `templates/` — the GitHub issue and bug-fix PR templates, and the generic caller workflow to copy into a target repo (`/build-context` also writes a copy tuned to the repo, in `.qa/`)
 - `scripts/` — helper scripts the skills shell out to:
-  - `parse_coverage.py` — turns a Cobertura `coverage.xml` into the coverage JSON `.qa/test-inventory.json` uses
+  - `parse_coverage.py` — turns Cobertura, JaCoCo or LCOV coverage reports (one, or one per module) into the coverage JSON `.qa/test-inventory.json` uses
   - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer
   - `gh_preflight.py` — checks GitHub access before a local `--live` run
   - `branch_names.py` — names every branch the pipeline pushes, including ClickUp task-ID naming
   - `render_trace.py` — turns a run's execution log into the readable "what the agent did" timeline
+  - `collect_telemetry.py` — builds `telemetry.json` and the run-cost block, the same way for CI and local runs
+  - `local_run_log.py` — turns the Claude Code session that ran the pipeline into a CI-shaped execution log
+  - `run_local.py` — runs the pipeline headless on your machine, exactly as CI does, cost included
   - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check))
-- `fixtures/` — a sample repo with known, documented bugs, used to grade `/triage-tests`
+- `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
 ## Working on this repo itself

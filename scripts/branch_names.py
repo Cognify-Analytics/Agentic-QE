@@ -11,7 +11,8 @@ Usage:
 Default naming (no --clickup):
 
     auto-fix/triage-<sha>                     SIMPLE test fixes
-    auto-fix/bugfix-issue-<n>                 bug fixes (fix_bugs)
+    auto-fix/bugfix-issue-<n>                 bug fixes (fix_bugs, or a maintainer's /qa fix)
+    auto-fix/qa-decision-issue-<n>            test updates after /qa not-a-bug or /qa wont-fix
     agentic-qe/qa-baseline-<sha>              .qa/ baseline (workflow only)
 
 ClickUp naming (--clickup), for repos whose branch policy requires a ClickUp
@@ -21,6 +22,7 @@ one -- run on bug/CU-101010-cache-loading and you get:
 
     auto-fix/CU-101010-triage-<sha>
     auto-fix/CU-101010-bugfix-issue-<n>
+    auto-fix/CU-101010-qa-decision-issue-<n>
     auto-fix/CU-101010-qa-baseline-<sha>
 
 The ID is the first CU-<letters/digits> segment of the branch name, matched
@@ -33,10 +35,12 @@ Prints JSON to stdout:
     {"clickup": true, "task_id": "101010", "task_id_source": "branch",
      "branches": {"triage": "auto-fix/CU-101010-triage-a1b2c3d",
                   "bugfix": "auto-fix/CU-101010-bugfix-issue-{issue_number}",
+                  "decision": "auto-fix/CU-101010-qa-decision-issue-{issue_number}",
                   "qa_baseline": "auto-fix/CU-101010-qa-baseline-a1b2c3d"},
      "problem": null}
 
-"bugfix" is a template: replace {issue_number} with the issue's number.
+"bugfix" and "decision" are templates: replace {issue_number} with the
+issue's number.
 With --clickup and no usable ID anywhere, "branches" is null and "problem"
 says why. The pipeline must then push no branch at all -- a branch outside
 the naming policy is exactly what this option exists to prevent. Always
@@ -59,6 +63,7 @@ def branch_names(branch, sha, clickup=False, task_id_fallback=None):
         result["branches"] = {
             "triage": f"auto-fix/triage-{sha}",
             "bugfix": "auto-fix/bugfix-issue-{issue_number}",
+            "decision": "auto-fix/qa-decision-issue-{issue_number}",
             "qa_baseline": f"agentic-qe/qa-baseline-{sha}",
         }
         return result
@@ -86,6 +91,7 @@ def branch_names(branch, sha, clickup=False, task_id_fallback=None):
     result["branches"] = {
         "triage": f"{prefix}-triage-{sha}",
         "bugfix": f"{prefix}-bugfix-issue-{{issue_number}}",
+        "decision": f"{prefix}-qa-decision-issue-{{issue_number}}",
         "qa_baseline": f"{prefix}-qa-baseline-{sha}",
     }
     return result

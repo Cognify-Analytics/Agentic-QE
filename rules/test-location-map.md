@@ -17,12 +17,15 @@ Use that location, even if it is unusual. The repo's convention beats the langua
 
 | Language | Test location |
 |---|---|
-| Java / Kotlin (Maven, Gradle) | `src/test/java/` mirroring the package path |
+| Java (Maven, Gradle) | `src/test/java/` mirroring the package path, in the same module |
+| Kotlin (Maven, Gradle) | `src/test/kotlin/` mirroring the package path, in the same module |
 | Python | `tests/` |
 | Go | same folder as the source file, named `*_test.go` |
-| JavaScript / TypeScript (Jest) | `__tests__/` or alongside as `*.test.ts` |
+| JavaScript / TypeScript (Jest, Vitest) | a root `__tests__/` mirroring the source tree, files named `*.test.ts(x)` |
 | C# | a sibling `<Project>.Tests/` project |
 | Rust | `tests/` for integration, inline `#[cfg(test)]` for unit |
+
+Language folders refine this for their ecosystem: `rules/lang/python/python-test-location.md`, `rules/lang/javascript/js-ts-test-location.md` (what Jest and Vitest actually collect, helpers, Next.js `pages/`), and `rules/lang/jvm/jvm-build-and-location.md` (modules, Surefire naming, test resources).
 
 ### 3. Cannot tell?
 

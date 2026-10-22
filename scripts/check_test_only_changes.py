@@ -27,10 +27,12 @@ Tests are recognised by convention, never by what the run says it wrote --
 a safety check that trusted the model's own report would check nothing:
 
     a directory named like tests/, test/, spec/, __tests__/, e2e/, cypress/,
-    __snapshots__/, src/test/..., MyApp.Tests/, integration_tests/
+    __snapshots__/, src/test/..., MyApp.Tests/, integration_tests/, or a
+    Gradle test source set straight under src/ (src/testFixtures/,
+    src/jvmTest/, src/integrationTest/)
     a file named like test_x.py, x_test.py, conftest.py, x.test.ts,
     x.spec.js, x_test.go, FooTest.java, FooTests.cs, x_spec.rb, FooTest.php,
-    setupTests.ts, vitest.setup.ts
+    setupTests.ts, vitest.setup.ts, test-utils.tsx
 
 So a co-located test (frontend/src/lib/format.test.ts) passes, while
 frontend/src/lib/format.ts right next to it does not.
@@ -55,6 +57,9 @@ TEST_DIR = re.compile(
     r"|(?:^|[._-])(?:tests?|specs?|testing)(?:$|[._-])",
     re.IGNORECASE,
 )
+# A Gradle source set directly under src/. Case-sensitive and anchored to
+# src/ on purpose: a feature folder like src/features/abTest/ is production.
+TEST_SOURCE_SET = re.compile(r"^(?:testFixtures|[a-z][A-Za-z]*Test)$")
 # Matched against the file name.
 TEST_FILE = re.compile(
     r"^(?:test_.+\.py|.+_test\.py|conftest\.py"
@@ -63,21 +68,26 @@ TEST_FILE = re.compile(
     r"|.+(?:Test|Tests|IT|Spec)\.(?:java|kt|kts|scala|groovy|cs|swift)"
     r"|.+_(?:spec|test)\.rb"
     r"|.+Test\.php"
-    r"|(?:setupTests|setup-tests|jest\.setup|vitest\.setup)\.[cm]?[jt]sx?)$"
+    r"|(?:setupTests|setup-tests|jest\.setup|vitest\.setup)\.[cm]?[jt]sx?"
+    r"|(?:test-utils|testUtils|test-helpers|testHelpers)\.[cm]?[jt]sx?)$"
 )
 
 # What running a test suite leaves behind. Only ever applied to untracked
 # paths, and a directory only counts if git tracks nothing inside it -- so a
 # real source package that happens to be called coverage/ is still judged.
+# target/ and build/ are Maven's and Gradle's output: a repo that forgot to
+# gitignore them would otherwise fail every Java/Kotlin run.
 BYPRODUCT_DIRS = {
     "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache",
     ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".hypothesis", "htmlcov",
     "coverage", ".nyc_output", "test-results", "playwright-report",
+    ".next", ".swc", ".turbo", "target", "build", ".gradle", ".kotlin",
 }
 BYPRODUCT_FILE = re.compile(
     r"^(?:\.coverage(?:\..+)?|coverage\.(?:xml|json|lcov)"
     r"|coverage-(?:final|summary)\.json|cobertura-coverage\.xml|clover\.xml"
-    r"|lcov\.info|junit(?:-.+)?\.xml|test-results\.xml|.+\.py[co]|\.DS_Store)$"
+    r"|lcov\.info|junit(?:-.+)?\.xml|test-results\.xml|.+\.py[co]|\.DS_Store"
+    r"|jacoco.*\.exec|.+\.tsbuildinfo)$"
 )
 
 
@@ -141,7 +151,10 @@ def classify(path, untracked, tracked):
     parts = path.split("/")
     if untracked and is_byproduct(parts, tracked):
         return "byproduct"
-    if any(TEST_DIR.search(part) for part in parts[:-1]) or TEST_FILE.match(parts[-1]):
+    if (any(TEST_DIR.search(part) for part in parts[:-1])
+            or any(parts[n - 1] == "src" and TEST_SOURCE_SET.match(parts[n])
+                   for n in range(1, len(parts) - 1))
+            or TEST_FILE.match(parts[-1])):
         return "test"
     return "other"
 

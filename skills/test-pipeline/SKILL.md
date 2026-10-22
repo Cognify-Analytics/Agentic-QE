@@ -6,9 +6,11 @@ allowed-tools: Read, Write, Bash, Skill
 
 # Test Pipeline Skill
 
-You run `/generate-tests`, `/build-context`, and `/triage-tests` in
-sequence, checking after each one that it actually produced valid output
-before letting the next stage rely on it. You are **not forked** — you run
+You run `/follow-up-issues`, `/generate-tests`, `/build-context`, and
+`/triage-tests` in sequence, checking after each one that it actually
+produced valid output before letting the next stage rely on it. Stage 0,
+`/follow-up-issues`, acts on what maintainers replied to the issues earlier
+runs filed. You are **not forked** — you run
 in the developer's main session so they can watch each stage happen.
 
 **Arguments, if given:** $ARGUMENTS — pass `--live` to run `/triage-tests`
@@ -82,6 +84,9 @@ single-session behavior, just non-interactive.
    and say to run from a branch named after its ClickUp task, or drop
    `--clickup-branches`. CI carries on without pushing branches in this
    case, because nobody is there to ask; locally, you are.
+
+   Also add `"followup": {"reminder_days": 7}` (Stage 0's reminder interval;
+   CI writes it from the workflow's `reminder_days` input).
 6. **Skip this step entirely in CI mode** (i.e. when `run.json`'s `"mode"`
    is `"ci"`) — the workflow already keeps `.claude-pipeline/` out of the
    diff via `.git/info/exclude`, and appending to a tracked `.gitignore` on
@@ -168,18 +173,28 @@ before this skill is invoked — see this repo's
   "live": true,
   "fix_bugs": false,
   "branch_naming": { "...": "as above" },
+  "followup": { "reminder_days": 7 },
   "ci": {
     "pr_number": 42,
     "pr_base_branch": "feature/refunds",
+    "default_branch": "main",
     "run_url": "https://github.com/org/repo/actions/runs/123",
     "strategy": "incremental",
     "targets": ["src/orders.py", "src/pricing.py"],
-    "context_inputs_changed": true
+    "context_inputs_changed": true,
+    "followup_issue": null
   }
 }
 ```
 
-`ci.strategy` is `bootstrap` | `incremental` | `triage-only`. `ci.targets`
+`ci.strategy` is `bootstrap` | `incremental` | `triage-only` |
+`follow-up-only`. **`follow-up-only`** is a run started by a maintainer's
+comment on an `agentic-qe` issue (`ci.followup_issue` is that issue's
+number): run Stage 0 for that issue only, record every other stage as
+`"skipped:follow-up-only"` in `stages.json`, and go straight to Finish.
+That kind of run writes **nothing under `.qa/`**, no run record either:
+it's a reply to one comment, not a pipeline run, and a `.qa/` change on
+the default branch would open a baseline PR for every comment. `ci.targets`
 is the exact file list `/generate-tests` should test — non-empty means
 incremental (test exactly those files); empty means either whole-repo
 (`ci.strategy` is `bootstrap`) or nothing at all (`ci.strategy` is
@@ -198,6 +213,26 @@ all (e.g. `workflow_dispatch`), it reports `true` and nothing is skipped.
 A missing field means `true` — never treat absence as permission to skip.
 
 ---
+
+## Stage 0 — `/follow-up-issues`
+
+Invoke it with the Skill tool. It reads mode, branch names and
+`followup.reminder_days` from `run.json` (a local run writes
+`"followup": {"reminder_days": 7}` into `run.json` in step 5 of "Before
+starting"). It goes first so that a decision's PR (a fixed bug, an updated
+test) is already open before this run's triage, and so that triage sees
+issues a maintainer just closed.
+
+**Check before continuing:** does `.claude-pipeline/00-followup.json`
+exist? Whatever it says (`ok`, `skipped` because there's no GitHub access,
+or `failed`), **carry on to Stage 1**. Nothing downstream depends on it, so
+a follow-up problem must never block test generation or triage. Note a
+`failed`/`skipped` status in `summary.md`.
+
+**Its fix and decision PRs leave the working tree clean and put you back
+on the starting branch.** Check `git status --porcelain` before Stage 1.
+If it isn't clean, stop and report it: a later stage must never commit
+Stage 0's leftovers by accident.
 
 ## Stage 1 — `/generate-tests`
 
@@ -255,7 +290,13 @@ real to triage.
    schema file changed, so sections 1-3 of `context.md` cannot have
    changed.
 2. `.qa/context.md` already exists and has real content (the same check
-   you would otherwise run *after* the stage).
+   you would otherwise run *after* the stage), **and**
+   `.qa/github-action-qa-pipeline-template.yml` exists — a repo whose
+   baseline predates that file needs one run of the stage to get it — **and**
+   every `tool` named in `.qa/test-inventory.json`'s `tooling_gaps` already
+   appears in `context.md`'s section 5 (one grep per tool). A gap found by
+   the last run's `/triage-tests`, or by this run's `/generate-tests`, must
+   reach the developer's install list even when no doc changed.
 3. Stage 1 changed nothing — `01-tests.json`'s `files_created` and
    `files_modified` are both empty. New tests move coverage, coverage is
    section 4, and this condition is what stops a skipped Stage 2 from
@@ -264,8 +305,8 @@ real to triage.
 If all three hold: say "Context is current (inputs unchanged — stage
 skipped)." on screen, leave `.qa/context.md` byte-for-byte alone, record
 `"skipped:inputs-unchanged"` in `stages.json`, and move to Stage 3. Do not
-invoke the skill. Without this gate the skill regenerates all four
-sections from the whole repo on every run just to discover nothing
+invoke the skill. Without this gate the skill regenerates every
+section from the whole repo on every run just to discover nothing
 changed — correct, but the most expensive possible way to reach that
 answer.
 
@@ -281,6 +322,10 @@ not failure.
 **If the check fails: stop.** Do not run Stage 3 against a missing or
 empty context document — `/triage-tests` explicitly depends on it to judge
 whether a failure is a real bug.
+
+A missing `.qa/github-action-qa-pipeline-template.yml` after the stage is
+**not** a reason to stop — nothing downstream depends on it. Note it in
+`summary.md`'s "## Context" section and carry on.
 
 ## Stage 3 — `/triage-tests`
 
@@ -309,6 +354,10 @@ of. Before stopping at any gate above, write both:
    `"reason"`. Fill in whatever is genuinely known and leave the rest out
    rather than guessing at numbers no stage produced.
 
+3. **Local runs:** the telemetry and timeline from Finish step 5. In CI the
+   workflow builds them on every run, halted or not, and a local run must
+   match.
+
 Then report what failed on screen and stop. In CI the workflow commits
 that record the same way it would a successful run, so a halted run is
 visible in the repo rather than only in a job log that ages out.
@@ -324,13 +373,46 @@ visible in the repo rather than only in a job log that ages out.
    data. **If the pipeline stops early at any stage gate above, write this
    file before stopping**, with the stages that did run and
    `"not_reached"` for the rest.
-2. Read `run.json`, `01-tests.json`, `.qa/context.md`, and `03-triage.json`.
+2. Read `run.json`, `00-followup.json`, `01-tests.json`, `.qa/context.md`, and `03-triage.json` (whichever exist; a `follow-up-only` run has only the first two).
 3. Write `.claude-pipeline/summary.md` (shape below).
-4. Copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
+4. **Skip this step for a `follow-up-only` run**, which writes nothing under
+   `.qa/`. Otherwise, copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
    full scratch detail, just enough for a team to see pipeline history at a
    glance (see schema below). Create `.qa/runs/` if it doesn't exist.
-5. **Local runs only** — remind the developer on screen to commit
-   `.qa/context.md`, `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
+5. **Telemetry and the "what the agent did" timeline: local runs only.**
+   CI builds these in the workflow after the session ends. Skip this step
+   when `run.json`'s `"mode"` is `"ci"`, and when the environment variable
+   `AGENTIC_QE_TELEMETRY` is `external` (`scripts/run_local.py` set it: it
+   builds them itself afterwards, from the complete log, cost included).
+   Otherwise run these three commands, in this order, from the repo root.
+   They are the same scripts CI uses, so the files match CI's:
+
+   ```bash
+   rm -f .claude-pipeline/run-summary.md
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/local_run_log.py" --pipeline-dir .claude-pipeline
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/collect_telemetry.py" --execution-file .claude-pipeline/execution-log.json \
+     --source local-interactive --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/render_trace.py" .claude-pipeline/execution-log.json \
+     --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md --out .claude-pipeline/trace.md
+   ```
+
+   | File | Same as CI's |
+   |---|---|
+   | `execution-log.json` | the run's execution log in the artifact (here: cut from this session's transcript) |
+   | `telemetry.json` | the `qa-telemetry-*` artifact (same schema; `"source": "local-interactive"`). A copy per run is kept in `telemetry-history/` |
+   | `run-summary.md` | the job summary page: the run-cost block, then the timeline |
+   | `trace.md` | `trace.md` in the run artifact |
+   | `summary.md` | the PR comment (written in step 3) |
+
+   Session transcripts record tokens, not cost, so `cost_usd` is `null`
+   here. `scripts/run_local.py` gives the exact cost. None of these
+   scripts ever fails the run. If one prints an error, say so and carry on.
+   Then tell the developer, in two or three lines: turns, duration and
+   tokens from `telemetry.json`, the stage outcomes, and where
+   `run-summary.md` and `trace.md` are.
+6. **Local runs only** — remind the developer on screen to commit
+   `.qa/context.md`, `.qa/github-action-qa-pipeline-template.yml`,
+   `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
    every test file `01-tests.json` listed under
    `files_created`/`files_modified`. Locally this pipeline never commits on
    its own (Section 9, Rule 5/6 — commits and merges are for people).
@@ -350,6 +432,7 @@ visible in the repo rather than only in a job log that ages out.
 
 ```json
 {
+  "follow_up_issues": "ran",
   "generate_tests": "skipped:triage-only",
   "build_context": "skipped:inputs-unchanged",
   "triage_tests": "ran"
@@ -357,10 +440,11 @@ visible in the repo rather than only in a job log that ages out.
 ```
 
 Each value is one of `"ran"`, `"not_reached"` (the pipeline stopped before
-it), or `"skipped:<reason>"` — use exactly `"skipped:triage-only"` (Stage 1)
-and `"skipped:inputs-unchanged"` (Stage 2) for the two gates above, so runs
-stay comparable to each other over time. Do not invent new reason strings
-for those two cases.
+it), or `"skipped:<reason>"` — use exactly `"skipped:triage-only"` (Stage 1),
+`"skipped:inputs-unchanged"` (Stage 2) and `"skipped:follow-up-only"`
+(Stages 1-3 of a comment-triggered run) for the gates above, so runs stay
+comparable to each other over time. Do not invent new reason strings for
+those cases.
 
 **Expected — `.claude-pipeline/summary.md`:**
 
@@ -369,18 +453,23 @@ for those two cases.
 Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 {strategy, and any stage that was skipped, with its reason}
 
+## Issue follow-up
+{from 00-followup.json: one line per action — "#12 not a bug (@alice): test updated in #34, issue closed", "#15 reminded (8 days without a reply)" — or "No new replies on open QA issues"; say if it was skipped and why}
+
 ## Tests
 {files created/modified from 01-tests.json, coverage before -> after}
 {tests_flagged_as_possible_bugs count, if any, called out by name}
 
 ## Context
 {"context is current" or which sections were updated}
+{workflow template: created / updated / current / missing, as /build-context reported it — when created or updated, one line: "Copy .qa/github-action-qa-pipeline-template.yml to .github/workflows/qa.yml to run this pipeline in CI", plus any stack it could not set up}
 
 ## Failures
 {totals from 03-triage.json: passed/failed, SIMPLE fixed count, COMPLEX/AMBIGUOUS count}
 
 ## Needs a human
 {if 03-triage.json has a branch_naming_problem: say first, in one line, that no fix branch or PR was pushed because of it, and quote it}
+{if the inventory has any tooling_gaps: one line per gap — "<stack>: install <tool> <version> (<what it broke>)" — then "Install steps (PowerShell and bash): .qa/context.md, section 5"}
 {one line per issue in issues_created/issues_commented, report-only or real URL}
 {one line per entry in bug_fix_prs_created, flagged distinctly — e.g. "Bug-fix PR (needs careful review): ..." — since this is a production-code change, not a routine test fix}
 
@@ -388,7 +477,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 {pr_planned or pr_url — "no source code changed" unless bug_fix_prs_created is non-empty, in which case say explicitly that fix_bugs was on and list each bug-fix PR with the issue it relates to}
 
 ## Please commit
-{local runs: the exact file list from step 5 above}
+{local runs: the exact file list from Finish step 6 above}
 {CI runs: replace this section with "## Recorded" — say that `.qa/` was committed to the PR's head branch by the workflow, and name any test files travelling in the auto-fix PR}
 ```
 
@@ -402,10 +491,12 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
   "mode": "report-only",
   "strategy": "incremental",
   "stages": {
+    "follow_up_issues": "ran",
     "generate_tests": "ran",
     "build_context": "ran",
     "triage_tests": "ran"
   },
+  "followup_actions": { "fix-pr-opened": 1, "closed-not-a-bug": 1, "reminded": 2 },
   "coverage": { "before": 51.0, "after": 67.4 },
   "tests_created": 2,
   "tests_modified": 1,
@@ -418,6 +509,10 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
   "caps_hit": []
 }
 ```
+
+`followup_actions` counts `00-followup.json`'s `actions` by `action`
+(`{}` when there were none). A `follow-up-only` run writes no run record
+at all (see the CI `run.json` notes).
 
 `bug_fix_prs` is the count of `bug_fix_prs_created` entries with a non-null
 `pr_url` (i.e. actually opened, not report-only) — always `0` unless

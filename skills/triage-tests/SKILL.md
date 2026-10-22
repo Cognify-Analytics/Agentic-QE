@@ -171,6 +171,32 @@ save each stack's raw output to its own
 one combined file — two frameworks' output interleaved in one file is not
 reliably parseable. Capture one exit code per stack.
 
+**A stack that failed before any test ran is a tooling problem, not a
+test failure.** Recognise it from the tail: no test results at all, plus
+an error from the tooling itself, for example
+- `Cannot find dependency '@vitest/coverage-v8'`
+- `Test environment jest-environment-jsdom cannot be found`
+- `Preset ts-jest not found`
+- `ModuleNotFoundError: No module named 'pytest_cov'` / `unrecognized arguments: --cov`
+- `No tests found` / `Tests run: 0` caused by configuration
+- a Maven/Gradle build failure outside test sources
+
+Then:
+1. **If the error is about coverage only**, re-run the same command once
+   with its coverage flags removed (`--coverage…`, `--cov…`, the JaCoCo
+   goals or init script). If that runs, triage its results normally;
+   triage only needs pass/fail, not coverage.
+2. Record the gap in `03-triage.json`'s `tooling_gaps`. Also add it to
+   `.qa/test-inventory.json`'s `tooling_gaps` (same entry shape as
+   `/generate-tests` writes, `"detected_by": "triage-tests"`), replacing
+   only your own earlier entries for this stack. That's how it reaches
+   section 5 of `.qa/context.md`, where the developer is told what to
+   install.
+3. If the stack still couldn't run, classify nothing and file no issues
+   for it. A missing package is not a code bug. Put one line in
+   `escalated` naming the stack and the missing tool, and carry on with
+   the other stacks.
+
 **If every stack exited 0 (a green suite): stop here.** There are no
 failures to classify, so Steps 4 through 8.5 have nothing to act on. Record
 the totals from the tail you already read, skip to Step 9, and write
@@ -185,10 +211,29 @@ so Step 8 still applies even on a green suite; go there, then Step 9.
 *(Only reached when at least one stack failed — see Step 3.)*
 
 **Pull out failures with targeted searches, not by reading the whole
-file.** Grep the raw output for the framework's failure markers (`FAILED`,
-`FAIL `, `Error:`, `--- FAIL:`, `✕`, etc.) to get the list, then read only
-the surrounding block for each one — reading a 5,000-line log to find 3
-failures costs far more than 3 targeted reads.
+file.** Grep the raw output for the framework's failure markers to get the
+list, then read only the surrounding block for each one — reading a
+5,000-line log to find 3 failures costs far more than 3 targeted reads.
+
+| Framework | Failure markers to grep |
+|---|---|
+| pytest | `FAILED `, `ERROR ` (short summary at the end) |
+| Jest | `● ` (one block per failing test: `● describe › test name`), `FAIL ` (per file) |
+| Vitest | `FAIL `, `×` / `✗`, `AssertionError` |
+| node:test | `not ok `, `✖` |
+| Maven Surefire | `<<< FAILURE!`, `<<< ERROR!`, and the `[ERROR] Failures:` / `[ERROR] Errors:` summary |
+| Gradle | `> … FAILED` lines (`OrderServiceTest > createOrder_validRequest_returnsOrderId() FAILED`) |
+| Go | `--- FAIL:` |
+
+**JVM builds also write structured results**, which are more reliable than
+the console: `target/surefire-reports/*.txt` / `TEST-*.xml` (Maven) and
+`build/test-results/test/TEST-*.xml` (Gradle), one file per test class,
+with the full assertion message and stack trace of each failure. Grep
+those for `<failure`/`<error` and read only the failing class's file. A
+**compile error** in a test source (`COMPILATION ERROR`, `Compilation
+failed`, `e: file://…`) means no test ran at all in that module: record
+it as one failure against the test file that failed to compile, and
+classify it like any other.
 
 For each failing test, pull out: test name, file, error type, message, and
 stack trace/traceback. **Multi-stack:** also record which stack each
@@ -225,7 +270,10 @@ For each SIMPLE failure:
    source. This is fixing a mistake in how the test was written (a typo,
    a wrong import, a wrong fixture keyword), not re-deriving what the test
    should assert.
-3. Re-run just that test.
+3. Re-run just that test, with the single-test command for its framework
+   (`${CLAUDE_PLUGIN_ROOT}/rules/general/test-execution-verification.md`
+   lists them — `npx vitest run <file>`, `./mvnw -q test -Dtest=<Class>#<method> -Dsurefire.failIfNoSpecifiedTests=false`,
+   `./gradlew test --tests '<fqcn>.<method>'`, …). Never a watch mode.
 4. If it passes: keep the fix.
 5. If it still fails: undo the change, relabel the failure COMPLEX, and move
    on. Maximum **2 attempts** per failure before relabeling.
@@ -250,16 +298,29 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
    the template's own title convention, if any). This is what makes a
    re-run idempotent — a run's issue for the same failure must always
    produce the same title.
-3. **Look for an existing open issue first**, GitHub MCP server if
-   available, otherwise the `gh` CLI (`gh issue list --search ...`) —
-   search on the fingerprint from step 2, not just free-text keywords. If
-   one clearly matches this failure, comment on it instead of opening a new
-   one — this is what keeps a re-triggered run (e.g. `workflow_dispatch` on
-   the same PR) from filing a duplicate every time.
+3. **Look for an existing pipeline issue first, open or closed**, GitHub MCP
+   server if available, otherwise the `gh` CLI
+   (`gh issue list --label agentic-qe --state all --search "<fingerprint> in:title" --json number,state,stateReason,labels,url`).
+   Search on the fingerprint from step 2, not on free-text keywords. A
+   maintainer may already have decided this failure on that issue
+   (`${CLAUDE_PLUGIN_ROOT}/rules/issue-follow-up.md` §10):
+   - **Open:** don't open a new one, and don't comment unless the failure
+     *message* differs from the one the issue already shows (reminders are
+     `/follow-up-issues`' job). This is what keeps a re-triggered run from
+     filing a duplicate, or a comment, every time.
+   - **Closed with `qa:not-a-bug` or `qa:wont-fix`:** file nothing. Record
+     the failure in `acknowledged` with the issue and the decision. If the
+     test still asserts the rejected expectation, the decision PR isn't
+     merged yet; say so in the entry.
+   - **Closed as completed, and failing again:** a regression. Reopen it
+     (`gh issue reopen`) with a comment naming this sha and the failure,
+     instead of filing a new issue.
 4. Otherwise, draft a new issue from `${CLAUDE_PLUGIN_ROOT}/templates/github-issue-template.md`,
    filling in the fingerprinted title, the failure output, the relevant
    excerpt of `.qa/context.md` (or whatever you used in its absence, per
-   Step 1), and the resolved owners if any.
+   Step 1), and the resolved owners if any. Keep its `agentic-qe:issue`
+   marker and its reply menu: they are how a maintainer's answer gets
+   acted on at the next run (`/follow-up-issues`).
 5. **Report-only mode (default):** do not actually call the GitHub MCP
    server or `gh` — write the fully-drafted issue/comment content into
    `03-triage.json`'s `issues_created`/`issues_commented` and show it on
@@ -267,7 +328,10 @@ relabel COMPLEX. Do not rationalize a source change as a test fix.
 6. **`--live` mode:** actually create the issue (GitHub MCP server first; if
    it's not configured/available, fall back to `gh issue create` /
    `gh issue comment` — with `--repo` set to the local repo when running
-   locally, per Step 0) and record the real URL. Then assign it to the
+   locally, per Step 0), with the `agentic-qe` label (create it first if
+   the repo doesn't have it: `gh label create agentic-qe --color 5319e7
+   --description "Filed by the Agentic QE pipeline" --force`), and record
+   the real URL. Then assign it to the
    code owners, per "Assigning CODEOWNERS" below. When you commented on an
    existing issue instead, add any of this run's assignees it doesn't
    already have — an issue nobody is assigned to is the one that sits.
@@ -509,10 +573,23 @@ gitignored, not committed.
   "issues_commented": [],
   "bug_fix_prs_created": [],
   "branch_naming_problem": null,
+  "acknowledged": [],
+  "tooling_gaps": [],
   "escalated": [],
   "caps_hit": []
 }
 ```
+
+`acknowledged` lists failures a maintainer already decided on a closed
+issue, so no issue was filed:
+`{ "test": "...", "file": "...", "issue": 12, "decision": "wont-fix", "note": "decision PR #34 not merged yet" }`.
+Report-only runs never query GitHub, so they can't see decisions and
+leave this `[]`; their drafted issues may duplicate a decided one.
+
+`tooling_gaps` uses the same entry shape as `/generate-tests`' inventory
+field (`stack`, `tool`, `needed_for`, `version`, `evidence`, `effect`,
+`detected_by`, `detected_at_sha`). It is `[]` when every stack started
+normally (see Step 3).
 
 `mode` is always `"report-only"` or `"live"`. When `"report-only"`,
 `pr_url` and every issue's `url` are `null`, and each carries
