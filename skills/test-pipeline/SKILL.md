@@ -255,7 +255,9 @@ real to triage.
    schema file changed, so sections 1-3 of `context.md` cannot have
    changed.
 2. `.qa/context.md` already exists and has real content (the same check
-   you would otherwise run *after* the stage).
+   you would otherwise run *after* the stage), **and**
+   `.qa/github-action-qa-pipeline-template.yml` exists — a repo whose
+   baseline predates that file needs one run of the stage to get it.
 3. Stage 1 changed nothing — `01-tests.json`'s `files_created` and
    `files_modified` are both empty. New tests move coverage, coverage is
    section 4, and this condition is what stops a skipped Stage 2 from
@@ -281,6 +283,10 @@ not failure.
 **If the check fails: stop.** Do not run Stage 3 against a missing or
 empty context document — `/triage-tests` explicitly depends on it to judge
 whether a failure is a real bug.
+
+A missing `.qa/github-action-qa-pipeline-template.yml` after the stage is
+**not** a reason to stop — nothing downstream depends on it. Note it in
+`summary.md`'s "## Context" section and carry on.
 
 ## Stage 3 — `/triage-tests`
 
@@ -330,7 +336,8 @@ visible in the repo rather than only in a job log that ages out.
    full scratch detail, just enough for a team to see pipeline history at a
    glance (see schema below). Create `.qa/runs/` if it doesn't exist.
 5. **Local runs only** — remind the developer on screen to commit
-   `.qa/context.md`, `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
+   `.qa/context.md`, `.qa/github-action-qa-pipeline-template.yml`,
+   `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
    every test file `01-tests.json` listed under
    `files_created`/`files_modified`. Locally this pipeline never commits on
    its own (Section 9, Rule 5/6 — commits and merges are for people).
@@ -375,6 +382,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 
 ## Context
 {"context is current" or which sections were updated}
+{workflow template: created / updated / current / missing, as /build-context reported it — when created or updated, one line: "Copy .qa/github-action-qa-pipeline-template.yml to .github/workflows/qa.yml to run this pipeline in CI", plus any stack it could not set up}
 
 ## Failures
 {totals from 03-triage.json: passed/failed, SIMPLE fixed count, COMPLEX/AMBIGUOUS count}

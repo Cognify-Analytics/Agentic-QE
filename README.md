@@ -19,7 +19,7 @@ for the CI design.
 | Command | What it does |
 |---|---|
 | `/agentic-qe:generate-tests [file or folder]` | Generate unit tests for a target, matching the repo's own conventions |
-| `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview |
+| `/agentic-qe:build-context` | Build/update `.qa/context.md`, a living project overview, and `.qa/github-action-qa-pipeline-template.yml`, the CI workflow with this repo's setup already filled in |
 | `/agentic-qe:triage-tests [--live] [--fix-bugs]` | Run the suite, classify each failure as a bad test or a real bug, fix what's safe, file issues for the rest |
 | `/agentic-qe:test-pipeline [--live] [--fix-bugs] [file or folder]` | Run all three in sequence, end to end |
 
@@ -387,21 +387,31 @@ underscores. Then delete the copies you pasted somewhere in steps 2 and 3.
 
 #### Step 5 — Add the pipeline file to the target repo
 
-1. Open [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
+1. **If the target repo has a `.qa/github-action-qa-pipeline-template.yml`**
+   (`/agentic-qe:build-context` writes it, so it's there after any local
+   or CI run), copy that file. It's the same workflow with the repo's setup
+   already worked out: one install block per stack (backend, frontend, …)
+   and the right Node/Java/Python versions, each line commented with the
+   file it came from. Otherwise open
+   [`templates/qa-caller-workflow.yml`](templates/qa-caller-workflow.yml)
    in this repo and copy all of its contents. The **Copy raw file** button
    at the top right of the file does this in one click.
 2. In the target repo, click **Add file → Create new file**.
 3. In the file name box, type exactly `.github/workflows/qa.yml`. The
    slashes create the folders for you.
 4. Paste the contents.
-5. **Ask a developer on that repo to edit the `setup_script` part.** It's
+5. **Ask a developer on that repo to check the `setup_script` part.** It's
    the list of commands that install the repo's software, it's different
    for every repo, and getting it wrong is the most common reason a first
-   run fails. For a JavaScript/TypeScript repo they should also uncomment
-   `node_version`, and for Java/Kotlin `java_version`, set to the version
-   the project builds with. Leave everything else as it is. In particular, keep
-   `live: false` for now, so the pipeline only reports and doesn't file
-   anything yet.
+   run fails. With the generated template they only need to review it,
+   and fix any line that says "replace this line" (a stack it couldn't
+   work out). With the generic template they write it themselves, and for
+   a JavaScript/TypeScript repo also uncomment `node_version`, for
+   Java/Kotlin `java_version`, set to the version the project builds with.
+   Leave everything else as it is. In particular, keep `live: false` for
+   now, so the pipeline only reports and doesn't file anything yet.
+   `fix_bugs`, `model` and the other options in STEP 2 can be set later in
+   your copy, whenever you want them.
 6. Click **Commit changes**. If GitHub asks, choose to create a new branch
    and open a pull request, then get it approved and merged as usual.
 
@@ -773,8 +783,8 @@ python scripts/render_trace.py run.jsonl --out trace.md
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
 - `skills/` — the four skills (`generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
 - `rules/` — the single shared source of testing rules and conventions, read by the skills:
-  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage
-- `templates/` — the GitHub issue and bug-fix PR templates, and the caller workflow to copy into a target repo
+  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage, `context-file-template.md` and `qa-workflow-template.md` for the two files `/build-context` writes
+- `templates/` — the GitHub issue and bug-fix PR templates, and the generic caller workflow to copy into a target repo (`/build-context` also writes a copy tuned to the repo, in `.qa/`)
 - `scripts/` — helper scripts the skills shell out to:
   - `parse_coverage.py` — turns Cobertura, JaCoCo or LCOV coverage reports (one, or one per module) into the coverage JSON `.qa/test-inventory.json` uses
   - `resolve_owners.py` — maps files to their CODEOWNERS owners, and to who GitHub will accept as assignee/reviewer

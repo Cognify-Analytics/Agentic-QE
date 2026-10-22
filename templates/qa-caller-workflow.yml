@@ -3,6 +3,10 @@
 # Only one thing must be changed before the first run: STEP 1 below.
 # Everything else works as it is.
 #
+# Already ran /agentic-qe:build-context on the repo? Copy
+# .qa/github-action-qa-pipeline-template.yml instead: it is this file with
+# STEP 1 and the versions already filled in for that repo.
+#
 # Updating an existing qa.yml? Keep your current setup_script.
 # Full guide: README, "Run it as a GitHub Action".
 
@@ -42,8 +46,8 @@ jobs:
       #   Backend with uv:     pip install uv
       #                        uv sync --directory backend --frozen
       #   Node / React / Next: npm ci              (or: corepack enable && pnpm install --frozen-lockfile)
-      #   Java/Kotlin, Maven:  ./mvnw -q -B dependency:go-offline
-      #   Java/Kotlin, Gradle: ./gradlew --no-daemon dependencies > /dev/null
+      #   Java/Kotlin, Maven:  ./mvnw -B -q test-compile
+      #   Java/Kotlin, Gradle: ./gradlew --no-daemon -q testClasses
       #
       # Test libraries must already be in the repo's own manifest (jest/vitest,
       # @testing-library/*, junit-jupiter, mockito/mockk...). The pipeline never
@@ -54,6 +58,7 @@ jobs:
       live: false              # false = report only. Set to true later to file real issues and PRs
       # node_version: '22'     # uncomment if the repo has JavaScript or TypeScript
       # java_version: '21'     # uncomment if the repo has Java or Kotlin (match the build's target)
+      # python_version: '3.12' # uncomment if the repo needs a Python other than 3.12
 
       # ── Optional: leave these commented out unless you need them ────────────
       # fix_bugs: true                 # also open PRs that fix real bugs (set up branch protection first)

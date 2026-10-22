@@ -1,16 +1,24 @@
 ---
 name: build-context
-description: Use when the user asks for a project context document, an architecture or schema overview, or documentation of what a repository does.
+description: Use when the user asks for a project context document, an architecture or schema overview, documentation of what a repository does, or a GitHub Actions QA workflow set up for the repository.
 allowed-tools: Read, Write, Glob, Grep
 context: fork
 ---
 
 # Build Context Skill
 
-You build and maintain `.qa/context.md` — the one document that tells later
-stages (especially `/triage-tests`) what this codebase is supposed to do.
-You have no `Bash` and no `Edit` on purpose: you read, you write one file,
-that's it.
+You build and maintain two files in `.qa/`:
+
+- `.qa/context.md` — the one document that tells later stages (especially
+  `/triage-tests`) what this codebase is supposed to do.
+- `.qa/github-action-qa-pipeline-template.yml` — the QA pipeline's GitHub
+  Actions caller workflow with its setup already worked out for this repo
+  (every stack's install steps, runtime versions). A developer copies it
+  to `.github/workflows/qa.yml` and only picks the settings they want
+  (`live`, `fix_bugs`, `model`, …).
+
+You have no `Bash` and no `Edit` on purpose: you read, you write those two
+files, that's it.
 
 **Arguments, if given:** $ARGUMENTS — pass `--rebuild` to force a full
 rebuild regardless of what's already there.
@@ -47,7 +55,10 @@ with an existing `.qa/context.md`, that means regenerating those sections
 could not produce anything different.
 
 In that case: say "Context is current (inputs unchanged)." and **stop
-without reading or writing anything else.**
+without reading or writing anything else** — with one exception: if
+`.qa/github-action-qa-pipeline-template.yml` doesn't exist yet, skip
+straight to Step 10 to create it, then stop. (Its inputs didn't change
+either, so an existing one is still correct.)
 
 Two guards on this. `--rebuild` always wins — it forces the full path
 regardless. And a missing field means *changed*: only an explicit `false`
@@ -83,7 +94,8 @@ limit. Every run must produce something matching that shape.
      rebuild the whole document" without needing a file-count diff this
      skill has no way to compute.
   5. If **0 sections** would change: say "Context is current." on screen and
-     **stop — do not write the file.**
+     **do not write `context.md`** — go straight to Step 10, which decides
+     separately whether the workflow template needs writing.
   6. Otherwise, update only the sections that actually changed. Leave the
      others byte-for-byte as they are.
 
@@ -162,6 +174,39 @@ limit before saving — if it isn't, tighten section 1 and 3 first (they tend
 to run long); coverage numbers and schema facts should never be the part
 that gets cut.
 
+### Step 10 — The repo-tuned QA workflow template
+
+Read `${CLAUDE_PLUGIN_ROOT}/rules/qa-workflow-template.md` and
+`${CLAUDE_PLUGIN_ROOT}/templates/qa-caller-workflow.yml`, then build the
+candidate `.qa/github-action-qa-pipeline-template.yml` exactly as the rule
+says: the generic template verbatim, with only the header, `setup_script`,
+the runtime version lines and `max_turns` derived from this repo — one
+install block per stack (the same stacks `.qa/test-inventory.json` lists,
+or the manifest trees you found in Steps 4-6), each line traced to the file
+it came from. Most of what you need (manifests, lockfiles, the repo's own
+`.github/workflows/`) you already read for sections 1 and 3; read what's
+missing — version files like `.nvmrc`/`.python-version`, wrapper scripts —
+in one batch.
+
+- **File doesn't exist** → write it.
+- **It exists and the candidate is identical, ignoring the `(sha …)` in
+  the header** → leave it alone, so an unchanged repo never gets a rewrite
+  just for a new SHA.
+- **It exists and differs** → overwrite it whole. It's generated, not
+  hand-maintained: the developer's edits belong in their own copy at
+  `.github/workflows/qa.yml`, which you never touch.
+
+Then say on screen which it was ("Workflow template created/updated/
+current"), list the stacks it sets up, and flag any stack that got the
+failing placeholder (the rule's §5) — that is the line a developer must
+fix before the copy will run. When this run also writes `context.md`,
+mention the template in Step 8's changelog line if it was created or
+updated; never rewrite `context.md` just to log a template change.
+
+You never write to `.github/` — copying the template there is the
+developer's decision, and a workflow file appearing in a PR unasked would
+run with the repo's secrets.
+
 ---
 
 ## Troubleshooting
@@ -178,6 +223,17 @@ still write sections 1-3 from what's readable. `context_sha` is `unknown`.
 sections 1/3 first. Never drop a data-schema field or a coverage number to
 make room — those are the parts other skills actually rely on.
 
+**A stack's install can't be worked out from its files** (Bun, an
+unfamiliar build tool, no lockfile and no manifest). Write the failing
+placeholder line from `qa-workflow-template.md` §5 for that stack and say
+so — never a plausible-looking guess that would install the wrong thing.
+
+**The repo already has `.github/workflows/qa.yml`.** Still write the
+template in `.qa/`; read the existing file's `setup_script` as evidence
+(`qa-workflow-template.md` §2), and if your derived setup differs, say on
+screen what differs so the developer can decide whether to update their
+copy. Never edit `.github/`.
+
 **Existing `context.md` doesn't match the template shape at all** (e.g. a
 human wrote something free-form before this skill ever ran). Don't force a
 partial/incremental update onto a document that isn't in the expected shape
@@ -190,3 +246,7 @@ partial/incremental update onto a document that isn't in the expected shape
 
 - `${CLAUDE_PLUGIN_ROOT}/rules/context-file-template.md` — the exact shape, and the
   `[inferred]`/`[manual]` conventions
+- `${CLAUDE_PLUGIN_ROOT}/rules/qa-workflow-template.md` — how the repo-tuned
+  workflow template is derived (Step 10)
+- `${CLAUDE_PLUGIN_ROOT}/templates/qa-caller-workflow.yml` — the generic
+  caller workflow the template is built from
