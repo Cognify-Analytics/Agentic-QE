@@ -33,6 +33,9 @@ last_updated: {yyyy-mm-dd}
 ## 4. Test coverage
 {overall %, well/weakly/not covered modules, framework, known gaps}
 
+## 5. Test tooling requirements
+{per stack: what the pipeline needs, the version for this repo, present/missing, and how to add what's missing (PowerShell and bash), per rules/test-tooling-requirements.md}
+
 ## Changelog
 - {yyyy-mm-dd} {sha} — {one line: what changed, or "first version"}
 ```
@@ -58,9 +61,15 @@ last_updated: {yyyy-mm-dd}
   inside section 4 (e.g. `### Backend (pytest)`, `### Frontend (jest)`),
   each with its own %, well/weakly/not-covered breakdown, and known gaps.
   Never collapse two stacks into one combined percentage.
-- **1,500 words, hard limit.** `/triage-tests` loads this whole file into
-  its own context on every run — keep it dense, not exhaustive. Prefer a
-  short accurate sentence over a long hedge.
+- **1,500 words, hard limit**, for everything except section 5.
+  `/triage-tests` loads this whole file into its own context on every run —
+  keep it dense, not exhaustive. Prefer a short accurate sentence over a
+  long hedge.
+- **Section 5 follows `rules/test-tooling-requirements.md`**: its own
+  format (a table per stack plus fix commands) and its own 600-word limit.
+  Its install commands are the one place this file carries instructions
+  rather than facts. They're there because a developer opening `.qa/` is
+  exactly who needs them.
 - **If a whole section has nothing to report** (no external services, no
   env vars, no schema because the project has none), write that plainly —
   "None found." is a valid, complete answer for a subsection. Never leave a

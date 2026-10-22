@@ -257,7 +257,11 @@ real to triage.
 2. `.qa/context.md` already exists and has real content (the same check
    you would otherwise run *after* the stage), **and**
    `.qa/github-action-qa-pipeline-template.yml` exists — a repo whose
-   baseline predates that file needs one run of the stage to get it.
+   baseline predates that file needs one run of the stage to get it — **and**
+   every `tool` named in `.qa/test-inventory.json`'s `tooling_gaps` already
+   appears in `context.md`'s section 5 (one grep per tool). A gap found by
+   the last run's `/triage-tests`, or by this run's `/generate-tests`, must
+   reach the developer's install list even when no doc changed.
 3. Stage 1 changed nothing — `01-tests.json`'s `files_created` and
    `files_modified` are both empty. New tests move coverage, coverage is
    section 4, and this condition is what stops a skipped Stage 2 from
@@ -266,8 +270,8 @@ real to triage.
 If all three hold: say "Context is current (inputs unchanged — stage
 skipped)." on screen, leave `.qa/context.md` byte-for-byte alone, record
 `"skipped:inputs-unchanged"` in `stages.json`, and move to Stage 3. Do not
-invoke the skill. Without this gate the skill regenerates all four
-sections from the whole repo on every run just to discover nothing
+invoke the skill. Without this gate the skill regenerates every
+section from the whole repo on every run just to discover nothing
 changed — correct, but the most expensive possible way to reach that
 answer.
 
@@ -389,6 +393,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 
 ## Needs a human
 {if 03-triage.json has a branch_naming_problem: say first, in one line, that no fix branch or PR was pushed because of it, and quote it}
+{if the inventory has any tooling_gaps: one line per gap — "<stack>: install <tool> <version> (<what it broke>)" — then "Install steps (PowerShell and bash): .qa/context.md, section 5"}
 {one line per issue in issues_created/issues_commented, report-only or real URL}
 {one line per entry in bug_fix_prs_created, flagged distinctly — e.g. "Bug-fix PR (needs careful review): ..." — since this is a production-code change, not a routine test fix}
 

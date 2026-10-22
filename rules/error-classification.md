@@ -83,7 +83,7 @@ The tables above are language-neutral. This is what their signals look like in r
 | `NullPointerException` / `TypeError: Cannot read properties of undefined` thrown inside **production** code | all | AMBIGUOUS. A mock returning its default `null`/`undefined` because the test forgot to stub it is SIMPLE. Code that doesn't handle a documented empty/absent case is COMPLEX |
 | Passes alone, fails in the full suite (or the reverse) | all | Shared state between tests. If the leaking state is in **test code** (an unreset mock, `process.env`, a `mockkObject` without `unmockkAll`), SIMPLE. If it's in production code (a singleton, a module-level cache), COMPLEX |
 
-`act(...)` warnings and deprecation warnings are not failures, so don't classify them. "0 tests run" or "No tests found" isn't a test failure either; it's a location or configuration problem (`rules/lang/javascript/js-ts-test-location.md`, `rules/lang/jvm/jvm-build-and-location.md` §3). Report it in the run's notes.
+`act(...)` warnings and deprecation warnings are not failures, so don't classify them. Neither is a run that never started because a test tool is missing (`Cannot find dependency '@vitest/coverage-v8'`, `Test environment jest-environment-jsdom cannot be found`). That's a tooling gap: record it, file no issue (`skills/triage-tests/SKILL.md` Step 3). "0 tests run" or "No tests found" isn't a test failure either; it's a location or configuration problem (`rules/lang/javascript/js-ts-test-location.md`, `rules/lang/jvm/jvm-build-and-location.md` §3). Report it in the run's notes.
 
 ### Applying this without `.qa/context.md`
 

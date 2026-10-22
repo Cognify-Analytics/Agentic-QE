@@ -327,7 +327,37 @@ coverage reports into one parse_coverage.py run, their module paths and
 tooling don't line up. If a stack can't produce coverage without a build
 change (no coverage provider installed, a Surefire `argLine` that drops
 the agent), record coverage as `null` with the reason rather than
-changing the build.
+changing the build — and **store a `test_command` that runs without the
+coverage flags**, so `/triage-tests` can still run the suite. A command
+that fails at startup (Vitest's `Cannot find dependency
+'@vitest/coverage-v8'`) means no test runs at all.
+
+### Step 13a — Record tooling gaps
+
+Every time this run is held back by something missing from the repo's
+test setup, add an entry to `tooling_gaps` (schema below) in both
+`.qa/test-inventory.json` and `01-tests.json`. Typical cases:
+- no test runner at all (Step 2)
+- a coverage provider or plugin missing (Step 13)
+- no DOM environment for component tests
+- a mocking or testing library a module needed (skipped in Step 5, or
+  impossible to compile in Step 12)
+- a build setting that stops tests running (Gradle without
+  `useJUnitPlatform()`, an old Surefire, "0 tests" collected)
+
+Name the exact package (or build setting), what it broke, and the version
+that fits — the installed version it must match, when there is one
+(`rules/test-tooling-requirements.md` §3). Say each gap on screen too.
+
+`/build-context` turns these into section 5 of `.qa/context.md` — the
+"what to install, and how" list a developer actually reads — so be
+specific: "`@vitest/coverage-v8` 3.2.4 (must equal vitest 3.2.4): coverage
+run failed at startup" is actionable; "coverage unavailable" is not.
+
+In the inventory, replace only the entries with `"detected_by":
+"generate-tests"` for the stacks this run processed. Keep other stacks'
+entries and `/triage-tests`' entries as they are. A gap this run no longer
+hits is gone; one it still hits keeps its original `detected_at_sha`.
 
 ### Step 14 — Update the inventory and write scratch output
 
@@ -383,12 +413,32 @@ stack it isn't currently touching.
   "builders": [
     { "file": "tests/conftest.py", "provides": ["order_factory", "customer_factory"] }
   ],
+  "tooling_gaps": [],
   "changelog": [
     "2026-08-21 a1b2c3d — added tests for orders, pricing; coverage 51.0 → 67.4",
     "2026-08-14 9f8e7d6 — initial inventory built"
   ]
 }
 ```
+
+`tooling_gaps` (Step 13a) is `[]` when nothing is missing. Each entry:
+
+```json
+{
+  "stack": "frontend",
+  "tool": "@vitest/coverage-v8",
+  "needed_for": "coverage",
+  "version": "3.2.4 (must equal the installed vitest 3.2.4)",
+  "evidence": "npx vitest run --coverage → MISSING DEPENDENCY Cannot find dependency '@vitest/coverage-v8'",
+  "effect": "coverage recorded as null; test_command stored without --coverage",
+  "detected_by": "generate-tests",
+  "detected_at_sha": "f935d81"
+}
+```
+
+`stack` is `null` in a single-stack repo. `detected_by` is
+`generate-tests` or `triage-tests`; each skill only ever replaces its own
+entries.
 
 ### Multi-stack variant — `.qa/test-inventory.json`
 
@@ -485,6 +535,7 @@ added generated tests into, and never flip an existing `false` to `true`.
       "file": "tests/test_pricing.py",
       "reason": "expected 0.15 per docs/pricing.md; code returns 0.10. Kept failing, not deleted or rewritten — for /triage-tests to classify." }
   ],
+  "tooling_gaps": [],
   "notes": "Matched existing pytest fixtures in tests/conftest.py."
 }
 ```
@@ -552,8 +603,15 @@ searched and ask the user to clarify — do not guess a similarly-named file
 either way.
 
 **No test framework detected.** Say so on screen, write the `"status": "failed"`
-`01-tests.json` described in Step 2, and stop. Do not install one or assume a
+`01-tests.json` described in Step 2 — with a `tooling_gaps` entry naming
+the runner(s) that would fit — and stop. Do not install one or assume a
 default without telling the user.
+
+**A test tool is missing (coverage provider, DOM environment, mocking
+library).** Never install it and never edit the manifest. Work around it
+where a rule says how (run without coverage, use a hand-written fake),
+skip what genuinely can't be done, and record it in `tooling_gaps` (Step
+13a) so it reaches section 5 of `.qa/context.md`.
 
 **Compilation/build keeps failing after 5 attempts.** Stop, show the remaining
 errors, and ask the user to resolve the underlying build issue.

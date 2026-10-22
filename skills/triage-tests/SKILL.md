@@ -171,6 +171,32 @@ save each stack's raw output to its own
 one combined file — two frameworks' output interleaved in one file is not
 reliably parseable. Capture one exit code per stack.
 
+**A stack that failed before any test ran is a tooling problem, not a
+test failure.** Recognise it from the tail: no test results at all, plus
+an error from the tooling itself, for example
+- `Cannot find dependency '@vitest/coverage-v8'`
+- `Test environment jest-environment-jsdom cannot be found`
+- `Preset ts-jest not found`
+- `ModuleNotFoundError: No module named 'pytest_cov'` / `unrecognized arguments: --cov`
+- `No tests found` / `Tests run: 0` caused by configuration
+- a Maven/Gradle build failure outside test sources
+
+Then:
+1. **If the error is about coverage only**, re-run the same command once
+   with its coverage flags removed (`--coverage…`, `--cov…`, the JaCoCo
+   goals or init script). If that runs, triage its results normally;
+   triage only needs pass/fail, not coverage.
+2. Record the gap in `03-triage.json`'s `tooling_gaps`. Also add it to
+   `.qa/test-inventory.json`'s `tooling_gaps` (same entry shape as
+   `/generate-tests` writes, `"detected_by": "triage-tests"`), replacing
+   only your own earlier entries for this stack. That's how it reaches
+   section 5 of `.qa/context.md`, where the developer is told what to
+   install.
+3. If the stack still couldn't run, classify nothing and file no issues
+   for it. A missing package is not a code bug. Put one line in
+   `escalated` naming the stack and the missing tool, and carry on with
+   the other stacks.
+
 **If every stack exited 0 (a green suite): stop here.** There are no
 failures to classify, so Steps 4 through 8.5 have nothing to act on. Record
 the totals from the tail you already read, skip to Step 9, and write
@@ -531,10 +557,16 @@ gitignored, not committed.
   "issues_commented": [],
   "bug_fix_prs_created": [],
   "branch_naming_problem": null,
+  "tooling_gaps": [],
   "escalated": [],
   "caps_hit": []
 }
 ```
+
+`tooling_gaps` uses the same entry shape as `/generate-tests`' inventory
+field (`stack`, `tool`, `needed_for`, `version`, `evidence`, `effect`,
+`detected_by`, `detected_at_sha`). It is `[]` when every stack started
+normally (see Step 3).
 
 `mode` is always `"report-only"` or `"live"`. When `"report-only"`,
 `pr_url` and every issue's `url` are `null`, and each carries

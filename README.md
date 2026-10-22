@@ -52,6 +52,18 @@ The pipeline never edits a manifest or build file. Whatever the tests need
 a coverage provider) must already be in the repo. If something is missing,
 the run says exactly what, and skips the modules that need it.
 
+**To see what your repo needs**, open section 5, "Test tooling
+requirements", of `.qa/context.md` (written by `/agentic-qe:build-context`).
+For each stack it lists every tool the pipeline needs, whether the repo
+has it, and the version that fits the repo. For example,
+`@vitest/coverage-v8` must be exactly your installed `vitest` version, and
+`jest-environment-jsdom` the same major as `jest`. Under the table is a
+ready-to-paste install command, for Windows PowerShell first and then
+macOS/Linux. Gaps a run actually hit (such as a coverage run that failed
+because the provider wasn't installed) are listed there too, and in the
+"Needs a human" part of the run summary. Install them once, commit the
+manifest and lockfile, and every later run, local or CI, has them.
+
 ## Install
 
 You only do this once per computer. It takes about 5 minutes.
@@ -709,7 +721,7 @@ those runs it skips work rather than doing it cheaply.
 | Situation | Effect |
 |---|---|
 | PR changes no source file (`strategy: triage-only`) | `/generate-tests` is never invoked — the orchestrator writes its completion record directly instead of forking a subagent that would load ~15k tokens of rules to do nothing |
-| No doc/manifest/schema file changed, and no new tests were written | `/build-context` is never invoked — it would otherwise regenerate all four sections from the whole repo just to discover nothing changed |
+| No doc/manifest/schema file changed, and no new tests were written | `/build-context` is never invoked — it would otherwise regenerate every section from the whole repo just to discover nothing changed |
 | Test suite passes cleanly | `/triage-tests` reads only the totals, never the full output — the raw log is still saved for the artifact |
 
 The first two depend on the PR diff the workflow computes, so they apply

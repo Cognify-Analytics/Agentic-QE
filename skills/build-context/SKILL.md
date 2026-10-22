@@ -54,7 +54,13 @@ model file changed — the only inputs sections 1-3 are built from. Combined
 with an existing `.qa/context.md`, that means regenerating those sections
 could not produce anything different.
 
-In that case: say "Context is current (inputs unchanged)." and **stop
+Before skipping, check one more input those files don't cover: every
+`tool` in `.qa/test-inventory.json`'s `tooling_gaps` must already appear
+in `.qa/context.md` (grep each one). If any doesn't, a run found a new
+gap, so do not skip; take the incremental path in Step 2, where only
+section 5 will differ.
+
+Otherwise: say "Context is current (inputs unchanged)." and **stop
 without reading or writing anything else** — with one exception: if
 `.qa/github-action-qa-pipeline-template.yml` doesn't exist yet, skip
 straight to Step 10 to create it, then stop. (Its inputs didn't change
@@ -83,16 +89,18 @@ limit. Every run must produce something matching that shape.
 - It exists → **incremental path**:
   1. Read the existing file. Note every line containing `[manual]` — these
      survive no matter what.
-  2. Regenerate candidate content for each of the 4 sections (Steps 4-7,
+  2. Regenerate candidate content for each of the 5 sections (Steps 4-7a,
      same as a full build).
   3. For each section, compare the freshly generated candidate against the
      section currently in the file (with `[manual]` lines spliced back in
      first, since a `[manual]` line was never something regeneration would
-     reproduce on its own).
-  4. If **3 or 4 of the 4 sections** would change, treat this the same as a
+     reproduce on its own). A file written before section 5 existed has
+     none — that counts as section 5 changing.
+  4. If **3 or 4 of sections 1-4** would change, treat this the same as a
      full rebuild — approximates the PRD's "more than 30% of files changed →
      rebuild the whole document" without needing a file-count diff this
-     skill has no way to compute.
+     skill has no way to compute. Section 5 is judged on its own and never
+     counts toward this.
   5. If **0 sections** would change: say "Context is current." on screen and
      **do not write `context.md`** — go straight to Step 10, which decides
      separately whether the workflow template needs writing.
@@ -106,6 +114,9 @@ the "current SHA" for the header both come from here — **never recompute
 coverage yourself.** If this file doesn't exist, section 4 says so plainly
 ("No test inventory found — run `/generate-tests` first.") and the header's
 `context_sha` is `unknown`.
+
+Also note its `tooling_gaps`: the missing test tools later runs actually
+hit, which Step 7a turns into section 5.
 
 Check for a `stacks` object (see `/generate-tests`' multi-stack schema) —
 if present, this is a monorepo with more than one independently-tested
@@ -161,6 +172,36 @@ location, and known gaps. Do not average or sum the stacks into one
 number; a combined "60% coverage" figure across two unrelated codebases
 and frameworks is not a number anyone can act on.
 
+### Step 7a — Section 5: test tooling requirements
+
+Read `${CLAUDE_PLUGIN_ROOT}/rules/test-tooling-requirements.md` and follow
+it. For each stack, work out what the pipeline needs (test runner, coverage
+tool, DOM environment, mocking library, build settings such as Surefire's
+version or Gradle's `useJUnitPlatform()`, and the runtime), which of it the
+repo already has, and **the version that fits this repo**. Exact when one
+package is pinned to another (`@vitest/coverage-v8` = the installed
+`vitest`), the same major when they move together (`jest-environment-jsdom`
+↔ `jest`), "managed by Spring Boot" when a BOM owns it. Versions come from
+the lockfiles first, then the manifests.
+
+Start from `tooling_gaps` in `.qa/test-inventory.json` (Step 3): those are
+gaps `/generate-tests` or `/triage-tests` actually hit at runtime (a
+coverage run that failed, modules skipped for a missing package), so every
+one of them appears as ❌/⚠️ with what it broke. Everything else you can
+only infer from files, so mark it accordingly (✅ only when the lockfile
+shows it installed).
+
+For every ❌/⚠️, write the fix as a single command per stack. Put Windows
+PowerShell first, quoted so it pastes and runs as-is (the rule's §5 lists
+what breaks), and then macOS/Linux/Git Bash. For Java/Kotlin, give the
+`pom.xml`/Gradle snippet plus the command that verifies it. Runtimes
+(Node/Python/JDK) use the same derivation as the workflow template in
+Step 10, so the two never disagree.
+
+Say on screen how many items are missing per stack. A developer who only
+glances at the run output should still learn that section 5 has work for
+them.
+
 ### Step 8 — Changelog
 
 Append one line: date, SHA, and a specific one-line summary of what changed
@@ -169,8 +210,8 @@ section(s) updated and why).
 
 ### Step 9 — Save
 
-Write the result to `.qa/context.md`. Confirm it's under the 1,500-word
-limit before saving — if it isn't, tighten section 1 and 3 first (they tend
+Write the result to `.qa/context.md`. Confirm sections 1-4 are under the
+1,500-word limit, and section 5 under its own 600, before saving — if it isn't, tighten section 1 and 3 first (they tend
 to run long); coverage numbers and schema facts should never be the part
 that gets cut.
 
@@ -217,7 +258,9 @@ section 1 that documentation was sparse — don't pad the section to look more
 confident than the evidence supports.
 
 **`.qa/test-inventory.json` missing.** Section 4 says so and stops there;
-still write sections 1-3 from what's readable. `context_sha` is `unknown`.
+still write sections 1-3 from what's readable, and section 5 from the
+manifests and lockfiles alone (there are no runtime gaps to report yet).
+`context_sha` is `unknown`.
 
 **A section would grow past what fits in 1,500 words total.** Trim prose in
 sections 1/3 first. Never drop a data-schema field or a coverage number to
@@ -246,6 +289,8 @@ partial/incremental update onto a document that isn't in the expected shape
 
 - `${CLAUDE_PLUGIN_ROOT}/rules/context-file-template.md` — the exact shape, and the
   `[inferred]`/`[manual]` conventions
+- `${CLAUDE_PLUGIN_ROOT}/rules/test-tooling-requirements.md` — section 5:
+  what each stack needs, version derivation, PowerShell-safe install steps
 - `${CLAUDE_PLUGIN_ROOT}/rules/qa-workflow-template.md` — how the repo-tuned
   workflow template is derived (Step 10)
 - `${CLAUDE_PLUGIN_ROOT}/templates/qa-caller-workflow.yml` — the generic
