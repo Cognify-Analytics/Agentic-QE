@@ -86,12 +86,21 @@ on:
         default: 150
       model:
         description: >-
-          Model to run the pipeline on (e.g. claude-sonnet-5, claude-opus-5). Leave empty
-          for the action's default. Token volume, not model price, dominates the cost of a
-          run — see README "Cost and telemetry" before reaching for this.
+          Model to run the pipeline on: any --model value (opus, sonnet, claude-opus-5-5, ...).
+          Defaults to opus, the model that writes the deepest tests and the one a local
+          run normally uses, so CI and local runs match. sonnet costs less but writes
+          noticeably shallower tests — see README "Cost and telemetry".
         required: false
         type: string
-        default: ''
+        default: opus
+      effort:
+        description: >-
+          Reasoning effort for the whole run, stages included: low, medium, high, xhigh
+          or max. Defaults to high, the effort a local session normally runs at. Lower it
+          to trade test depth for cost.
+        required: false
+        type: string
+        default: high
     secrets:
       ANTHROPIC_API_KEY:
         required: true
@@ -113,7 +122,10 @@ concurrency:
 jobs:
   qa:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # A bootstrap run that tests every route of a multi-stack repo takes half an
+    # hour or more at the default model and effort. A timeout throws away
+    # everything the run wrote, so leave room.
+    timeout-minutes: 90
     # issue_comment: only a maintainer's comment on an issue this pipeline filed (not a
     # PR comment, not a bot). Everyone else's comments never start a run -- on a public
     # repo, a comment must not be able to make the pipeline change code. The pipeline's
@@ -326,11 +338,11 @@ jobs:
             { "env": { "GH_TOKEN": "${{ secrets.GITHUB_TOKEN }}",
                        "GH_REPO":  "${{ github.repository }}" } }
           claude_args: |
-            --model sonnet
+            --model ${{ inputs.model || 'opus' }}
+            --effort ${{ inputs.effort || 'high' }}
             --plugin-dir ./.agentic-qe
             --max-turns ${{ inputs.max_turns }}
             --allowedTools "Read,Write,Edit,Glob,Grep,Bash"
-            ${{ inputs.model && format('--model {0}', inputs.model) || '' }}
 
       # Cost/turn telemetry. Deliberately never fails the job — a missing or
       # reshaped execution log costs us a data point, not a run.
@@ -371,7 +383,8 @@ jobs:
             --repo "${{ github.repository }}" \
             --run-id "${{ github.run_id }}" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --model "${{ inputs.model || 'action-default' }}" \
+            --model "${{ inputs.model || 'opus' }}" \
+            --effort "${{ inputs.effort || 'high' }}" \
             --max-turns "${{ inputs.max_turns }}" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --github-output "$GITHUB_OUTPUT" \
@@ -418,7 +431,8 @@ jobs:
           python .agentic-qe/scripts/check_test_only_changes.py \
             --baseline "$RUNNER_TEMP/agentic-qe-tree-before.json" --github
 
-      # Persist the pipeline's own bookkeeping to the repo.
+      # Persist what the run produced: the pipeline's own bookkeeping in .qa/, and
+      # the tests it generated.
       #
       # This is deliberately a workflow step rather than a model instruction. It runs
       # after every stage has finished, so .qa/runs/<date>-<sha>.json — which the
@@ -426,9 +440,20 @@ jobs:
       # anything commits it. /triage-tests used to be asked to commit that file from
       # Stage 3, before it existed, which is why CI runs recorded nothing.
       #
+      # Where it goes:
+      #   - Generated tests that no auto-fix PR already carries leave together with
+      #     .qa/, on the pipeline's own branch, in a PR into the branch the run was
+      #     on (a draft in report-only mode). Together, so the inventory never names
+      #     a test file the branch doesn't have. Through a PR, because tests are code
+      #     a person reviews. Before this, a run with no SIMPLE fixes threw its tests
+      #     away and still committed an inventory that described them.
+      #   - No generated tests: .qa/ alone, committed onto the PR's head branch, or
+      #     pushed with a PR when the run was on the default branch.
+      #
       # Runs in report-only mode too: report-only is about not filing issues and not
-      # touching the developer's code, not about withholding the pipeline's own log.
-      - name: Record the run in .qa/
+      # touching the developer's code, not about throwing away the pipeline's own
+      # output.
+      - name: Record the run and keep the generated tests
         if: always() && steps.assert.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -437,6 +462,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
           START_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          LIVE: ${{ inputs.live }}
         run: |
           set -uo pipefail
 
@@ -447,56 +473,136 @@ jobs:
             exit 0
           fi
 
+          # Where things went: in the job log, the job summary, and at the end of
+          # summary.md, whose last section is the pipeline's "## Recorded" and which
+          # the next step posts as the PR comment.
+          note() {
+            echo "$1"
+            printf '%s\n\n' "$1" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+            if [ -f .claude-pipeline/summary.md ]; then
+              printf '\n%s\n' "$1" >> .claude-pipeline/summary.md
+            fi
+          }
+
           # /triage-tests checks out its own auto-fix/... branches and, in CI, never
           # switches back. Committing here would stack the record on top of those fix
           # commits, and the push below would then carry them straight onto the
           # developer's branch, skipping the fix PR. Go back to the commit the run
-          # started from first. .qa/ is never committed on a fix branch, so the
-          # uncommitted record comes along unchanged.
+          # started from first. Uncommitted work (.qa/, and generated tests no
+          # auto-fix branch took) comes along unchanged; a test file an auto-fix
+          # branch did take leaves the tree here and travels in that PR.
           if [ "$(git rev-parse HEAD)" != "$(git rev-parse "${START_SHA}^{commit}")" ]; then
             echo "Run ended on $(git rev-parse --abbrev-ref HEAD); returning to ${START_SHA} before recording."
             if ! git checkout -q --detach "${START_SHA}"; then
-              echo "::warning::Could not return to ${START_SHA} to record .qa/ — the record is in the run artifact only."
+              echo "::warning::Could not return to ${START_SHA} to record the run — .qa/ and the generated tests are in the run artifact only."
               exit 0
             fi
           fi
 
+          # The generated tests still in the working tree. Same rules as the safety
+          # check, so only real test files qualify, and anything already changed
+          # before the run started (by setup_script) is left out.
+          TESTS="$RUNNER_TEMP/agentic-qe-tests.txt"
+          python .agentic-qe/scripts/check_test_only_changes.py \
+            --baseline "$RUNNER_TEMP/agentic-qe-tree-before.json" --list-tests > "$TESTS" || : > "$TESTS"
+          TEST_COUNT=$(grep -c . "$TESTS" || true)
+
+          # A copy in the run artifact whatever happens below, so a failed push or a
+          # branch-naming problem never loses them.
+          while IFS= read -r f; do
+            f="${f%$'\r'}"
+            [ -f "$f" ] || continue
+            mkdir -p ".claude-pipeline/generated-tests/$(dirname "$f")"
+            cp "$f" ".claude-pipeline/generated-tests/$f"
+          done < "$TESTS"
+
           git add -- .qa/ 2>/dev/null || true
+          if git status --porcelain --ignored=matching -- .qa/ 2>/dev/null | grep -q '^!!'; then
+            echo "::warning::.qa/ has content but is git-ignored in this repo, so the pipeline's record cannot be committed. Remove the .qa entry from .gitignore."
+          fi
+          # Never .qa/ without the tests it describes: if they can't be staged,
+          # nothing is committed and both stay in the artifact.
+          if [ "$TEST_COUNT" -gt 0 ] && ! git --literal-pathspecs add --pathspec-from-file="$TESTS"; then
+            echo "::warning::Could not stage the generated tests, so nothing was committed. The tests and .qa/ are in the run artifact."
+            note "Nothing was committed: the generated tests could not be staged. They are in the run artifact, under \`generated-tests/\`, and \`.qa/\` beside them."
+            exit 0
+          fi
           if git diff --cached --quiet 2>/dev/null; then
-            # Tell apart "genuinely nothing new" from "changes exist but git refuses to
-            # stage them" — almost always .qa/ being gitignored. Reporting the first
-            # when it is really the second is what makes this silent and hard to debug.
-            IGNORED=$(git status --porcelain --ignored=matching -- .qa/ 2>/dev/null | grep '^!!' || true)
-            if [ -n "${IGNORED}" ]; then
-              echo "::warning::.qa/ has content but is git-ignored in this repo, so the pipeline's output cannot be recorded. Remove the .qa entry from .gitignore."
-            else
-              echo "No .qa/ changes to record."
-            fi
+            echo "No .qa/ changes and no generated tests to record."
             exit 0
           fi
 
           SHA=$(git rev-parse --short HEAD)
-          git commit -q \
-            -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
-            -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
 
-          # PRD Section 9 Rule 5: never push to a default branch. The recommended
-          # first-run bootstrap is a workflow_dispatch, which runs against exactly
-          # that — so this case gets its own branch and a PR instead of being dropped.
-          if [ -z "${HEAD_BRANCH}" ] || [ "${HEAD_BRANCH}" = "${DEFAULT_BRANCH}" ]; then
-            # Named by scripts/branch_names.py in the plan step. Null means ClickUp
-            # naming is on but there was no task ID: a branch outside the naming
-            # policy is worse than no branch, so keep the record in the artifact only.
-            QA_BRANCH=$(jq -r '.branch_naming.branches.qa_baseline // empty' .claude-pipeline/run.json 2>/dev/null || true)
-            if [ -z "${QA_BRANCH}" ]; then
-              if [ "$(jq -r '.branch_naming.clickup // false' .claude-pipeline/run.json 2>/dev/null)" = true ]; then
-                echo "::warning::ClickUp branch naming is on but no task ID was found, so the .qa/ baseline was not pushed. Re-run with the clickup_task_id input set. The record is in the run artifact only."
+          # .qa/ alone, on a non-default branch: commit straight onto that branch, so
+          # the record travels with the developer's PR and reaches the default branch
+          # when they merge it. A GITHUB_TOKEN push does not re-trigger workflows, so
+          # no loop.
+          if [ "$TEST_COUNT" -eq 0 ] && [ -n "${HEAD_BRANCH}" ] && [ "${HEAD_BRANCH}" != "${DEFAULT_BRANCH}" ]; then
+            git commit -q \
+              -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
+              -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
+            for attempt in 1 2 3; do
+              if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
+                note "Recorded \`.qa/\` on \`${HEAD_BRANCH}\`. No generated tests to keep."
                 exit 0
               fi
-              QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+              echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
+              git fetch --no-tags origin "${HEAD_BRANCH}" || true
+              git rebase "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
+              sleep 3
+            done
+            echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+            exit 0
+          fi
+
+          # Everything else goes on the pipeline's own branch, with a PR: generated
+          # tests (and the .qa/ that describes them) into the branch the run was on,
+          # or a .qa/-only baseline into the default branch. The pipeline never
+          # pushes to a default branch (PRD Section 9, Rule 5).
+          BASE="${HEAD_BRANCH:-${DEFAULT_BRANCH}}"
+
+          # Named by scripts/branch_names.py in the plan step. Null means ClickUp
+          # naming is on but there was no task ID: a branch outside the naming
+          # policy is worse than no branch, so keep everything in the artifact only.
+          QA_BRANCH=$(jq -r '.branch_naming.branches.qa_baseline // empty' .claude-pipeline/run.json 2>/dev/null || true)
+          if [ -z "${QA_BRANCH}" ]; then
+            if [ "$(jq -r '.branch_naming.clickup // false' .claude-pipeline/run.json 2>/dev/null)" = true ]; then
+              echo "::warning::ClickUp branch naming is on but no task ID was found, so nothing was pushed. Re-run with the clickup_task_id input set."
+              note "Nothing was pushed: ClickUp branch naming is on and no task ID was found. The generated tests are in the run artifact, under \`generated-tests/\`, and \`.qa/\` beside them."
+              exit 0
             fi
-            if git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
-              cat > qa-baseline-pr.md <<EOF
+            QA_BRANCH="agentic-qe/qa-baseline-${SHA}"
+          fi
+          # A re-run at the same commit gets its own branch and PR; the earlier
+          # one is left exactly as it is.
+          if git ls-remote --exit-code --heads origin "${QA_BRANCH}" >/dev/null 2>&1; then
+            QA_BRANCH="${QA_BRANCH}-${GITHUB_RUN_ID}"
+          fi
+
+          BODY="$RUNNER_TEMP/agentic-qe-pr-body.md"
+          DRAFT=()
+          if [ "$TEST_COUNT" -gt 0 ]; then
+            # No [skip ci]: these are tests, and the repo's own CI should run them.
+            git commit -q \
+              -m "test(qa): add tests generated by Agentic QE run ${SHA}" \
+              -m "${TEST_COUNT} test file(s) and the .qa/ record that describes them. No production source. Run: ${RUN_URL}"
+            REPORT_ONLY=()
+            if [ "${LIVE}" != true ]; then
+              REPORT_ONLY=(--report-only)
+              DRAFT=(--draft)
+            fi
+            TITLE=$(python .agentic-qe/scripts/render_tests_pr.py --files "$TESTS" --sha "$SHA" \
+              --pipeline-dir .claude-pipeline --run-url "$RUN_URL" "${REPORT_ONLY[@]}" --out "$BODY")
+            if [ ! -s "$BODY" ]; then
+              printf 'Tests generated by the Agentic QE pipeline at `%s`, and the `.qa/` record that describes them.\n\n[Run log](%s)\n' "$SHA" "$RUN_URL" > "$BODY"
+            fi
+          else
+            git commit -q \
+              -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
+              -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
+            TITLE="Agentic QE: record run ${SHA}"
+            cat > "$BODY" <<EOF
           Adds the Agentic QE baseline and run record for \`${SHA}\`. Only \`.qa/\` is
           touched — no production source, no tests.
 
@@ -505,32 +611,28 @@ jobs:
 
           [Run log](${RUN_URL})
           EOF
-              gh pr create --base "${DEFAULT_BRANCH}" --head "${QA_BRANCH}" \
-                --title "Agentic QE: record run ${SHA}" \
-                --body-file qa-baseline-pr.md 2>/dev/null \
-                || echo "A PR for ${QA_BRANCH} already exists."
-              rm -f qa-baseline-pr.md
-              echo "Recorded on ${QA_BRANCH} (refused to push to default branch ${DEFAULT_BRANCH})."
-            else
-              echo "::warning::Could not push ${QA_BRANCH} — the record is in the run artifact only."
-            fi
-            exit 0
           fi
 
-          # Normal PR run: commit straight onto the PR's own head branch, so the record
-          # travels with the developer's PR and reaches the default branch when they
-          # merge it. A GITHUB_TOKEN push does not re-trigger workflows, so no loop.
-          for attempt in 1 2 3; do
-            if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
-              echo "Recorded .qa/ on ${HEAD_BRANCH}."
-              exit 0
-            fi
-            echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
-            git fetch --no-tags origin "${HEAD_BRANCH}" || true
-            git rebase "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
-            sleep 3
-          done
-          echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+          if ! git push -q origin "HEAD:refs/heads/${QA_BRANCH}"; then
+            echo "::warning::Could not push ${QA_BRANCH}. The generated tests and .qa/ are in the run artifact only."
+            note "Could not push \`${QA_BRANCH}\`. The generated tests are in the run artifact, under \`generated-tests/\`, and \`.qa/\` beside them."
+            exit 0
+          fi
+          if ! PR_URL=$(gh pr create --base "${BASE}" --head "${QA_BRANCH}" --title "${TITLE}" \
+                          --body-file "$BODY" "${DRAFT[@]}" 2>"$RUNNER_TEMP/gh-pr-error.txt"); then
+            echo "::warning::Pushed ${QA_BRANCH}, but could not open its PR: $(head -c 300 "$RUNNER_TEMP/gh-pr-error.txt")"
+            PR_URL=""
+          fi
+
+          if [ "$TEST_COUNT" -gt 0 ]; then
+            WHERE="${PR_URL:-branch \`${QA_BRANCH}\` (no PR could be opened)}"
+            AS_DRAFT=""
+            [ "${LIVE}" = true ] || AS_DRAFT=", as a draft because this run was report-only"
+            note "**Generated tests kept:** ${TEST_COUNT} test file(s) and the \`.qa/\` record that describes them are in ${WHERE}, into \`${BASE}\`${AS_DRAFT}. Merge it to keep them."
+            echo "::notice title=Agentic QE generated tests::${TEST_COUNT} test file(s) in ${PR_URL:-${QA_BRANCH}}"
+          else
+            note "Recorded \`.qa/\` on \`${QA_BRANCH}\` (${PR_URL:-no PR could be opened}): the pipeline never pushes to the default branch."
+          fi
           exit 0
 
       - name: Post summary comment

@@ -23,8 +23,16 @@ the stack, don't assume one.
 - Never invent a test folder — follow `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` exactly.
 - Quality over speed. Read the rules and the real dependency types before writing
   a single test. Tests that invent method names or fields are worse than no tests.
-- Limits: 20 modules per run, 5 compile-fix attempts, 3 run-fix attempts per test.
-  Every limit hit gets recorded, not silently ignored.
+- Depth, not a quick pass. A module is covered when its entry points are (every
+  public function, and for a web app every route, through the framework's test
+  client), not when its easiest helpers are (Steps 5, 9 and 13). A run in CI must
+  go as deep as a run in a developer's session.
+- Prove it before you skip it. A module or stack is skipped for a missing package
+  or a failed import only after a command has shown it (Step 5a), and that
+  command's output is the recorded evidence.
+- Limits: 20 modules per run, 5 compile-fix attempts, 3 run-fix attempts per test,
+  2 extra coverage passes per module (Step 13). Every limit hit gets recorded, not
+  silently ignored.
 
 ---
 
@@ -69,7 +77,7 @@ written and where:
 
 | Language (Step 2) | Language folder(s), read every file directly inside |
 |---|---|
-| Python | `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/` |
+| Python | `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/` (its `frameworks/` subfolder is Tier 1b) |
 | JavaScript, TypeScript | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/` |
 | Java | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` and `${CLAUDE_PLUGIN_ROOT}/rules/lang/java/` |
 | Kotlin | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` and `${CLAUDE_PLUGIN_ROOT}/rules/lang/kotlin/` (where they differ from `java/`, the Kotlin files win) |
@@ -85,6 +93,7 @@ its manifest's dependencies):
 | `next` | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/nextjs.md` (and `react.md`) |
 | `express`, `fastify`, `@nestjs/core`, `koa`, `hono`, or a plain Node server/CLI | `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/node-backend.md` |
 | any `spring-boot-starter-*` | `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/frameworks/spring-boot.md` |
+| `fastapi`, `starlette`, `flask` or `django` (Python) | `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/frameworks/web-backend.md` |
 
 A full-stack repo can need more than one (a Next.js app with API routes
 reads `react.md` and `nextjs.md`; it reads `node-backend.md` only if it
@@ -189,11 +198,13 @@ run — you will create it at the end.
   see a normal completion rather than a failure. Do not fall through to
   the whole-repo ranking below — an empty `ci.targets` here means
   "nothing changed," not "no target given."
+- Otherwise, if a target was given (`$ARGUMENTS`), use exactly that. It comes
+  from the user, or from `/test-pipeline` re-running this stage for a module
+  a wrong skip left untested, and it wins over `ci.targets`.
 - Otherwise, if `.claude-pipeline/run.json` exists and its `ci.targets`
   array is non-empty, test exactly those paths — this is CI's incremental
   mode, targeting only the source files the PR actually changed. Skip the
   ranking below entirely.
-- Otherwise, if the user gave a target (`$ARGUMENTS`), use exactly that.
 - Otherwise (no CI targets, no `$ARGUMENTS` — whole-repo bootstrap, local or
   CI), list every source module with no corresponding test file (per the
   inventory, or by scanning if there is no inventory yet). Rank them: business
@@ -204,12 +215,56 @@ run — you will create it at the end.
 - A module that is genuinely untestable in isolation (needs live network, a real
   external system, etc., with no reasonable seam to mock) is recorded as skipped
   with a `skipped_reason` — it is not silently dropped, and it is not forced.
+  "Talks to a database" or "calls an API" does not make a module untestable:
+  those are the seams you fake. A skip for a missing package or a failed import
+  needs Step 5a's proof first.
 - **Multi-stack repos:** whatever the target list above ends up being (CI
   targets, `$ARGUMENTS`, or the ranked list), group it by which stack each
   path falls under before Step 6. Steps 6-13 then run once per stack, using
   that stack's own test command, dependency graph, and house style — a
   frontend test file must never be written using the backend's test
   framework's conventions, or vice versa.
+
+**Then list each target's entry points.** A target is a file, but what gets
+tested is what it exposes:
+- its public functions and classes;
+- for a web app, every route (`@app.get(...)`, `@router.post(...)`,
+  `@app.route(...)`, Express `router.get(...)`, Spring `@GetMapping`, a Next.js
+  route handler);
+- every middleware;
+- every webhook or callback handler.
+
+Write the list down, because Step 9 plans against it and Step 13 checks
+against it. A 3,000-line `main.py` with fifty routes is one target and
+fifty-plus entry points. A plan that covers its helpers and none of its routes
+has not covered it.
+
+### Step 5a — Prove it before you skip it
+
+Before you skip a module, or a whole stack, because a package is missing or
+"it can't be imported", show it with a command. Run it in that stack's own
+folder and environment, and keep the output:
+
+| Claim | Prove it with |
+|---|---|
+| The module can't be imported | `cd <stack> && python -c "import <module>"`, using the import path the tests will use |
+| A Python package is missing | `python -m pip show <package>` |
+| A JS/TS package is missing | `npm ls <package>` (or `pnpm why <package>` / `yarn why <package>`) |
+| A JVM dependency is missing | quote the build file's dependency block that lacks it |
+
+Read the target's imports as well as its manifest:
+- A heavy library imported **inside a function** (such as
+  `from resemblyzer import VoiceEncoder` in a function body) doesn't stop the
+  module importing. Fake it in the tests, whether it's installed or not
+  (`rules/lang/python/frameworks/web-backend.md` §7).
+- A library that **is** installed but slow or heavy (an ML model, a GPU
+  toolkit) gets faked at its seam. It is never a reason to skip.
+
+Skip only when the command fails. Record the command, plus the output lines
+that show the failure, as the entry's `evidence`, both in `modules_skipped`
+and in `tooling_gaps` (Step 13a). "Not installed in the environment" with no
+command behind it is not evidence. `/test-pipeline` re-checks every such
+claim, and re-runs this stage for any that turn out wrong.
 
 ### Step 6 — Read the dependencies
 
@@ -244,6 +299,13 @@ a Jest `__tests__/` folder: Jest runs every file there as a test suite (see
 For each target, list the test cases in Given-When-Then form, one per code branch
 (success paths, error/validation paths, boundary conditions). Naming format:
 `{method}_{state}_{outcome}`.
+
+Plan against Step 5's entry-point list. Every entry point gets cases, or a
+one-line reason why not, which goes into `coverage_shortfall` (Step 13). For a
+route, use the per-route list in the framework file: `web-backend.md` §5 for
+Python, `node-backend.md` §2 for Node, `spring-boot.md` for Spring. That means
+success, each validation failure, unauthenticated/forbidden, not-found,
+downstream failures, and side effects.
 
 ```
 ## Test Cases for OrderService.createOrder
@@ -310,7 +372,7 @@ learned in Step 7 and using the builders from Step 8.
 3. **Never modify production source code to make a test pass**, in either case
    above.
 
-### Step 13 — Get coverage
+### Step 13 — Get coverage, and go deeper where it's thin
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/parse_coverage.py` against the test run's coverage output to get a
 clean per-module coverage JSON. It reads Cobertura XML (pytest-cov,
@@ -332,6 +394,31 @@ coverage flags**, so `/triage-tests` can still run the suite. A command
 that fails at startup (Vitest's `Cannot find dependency
 '@vitest/coverage-v8'`) means no test runs at all.
 
+**Then go deeper where coverage is thin.** Coverage is how you find what Step 9
+missed, not just a number to report. For each target module under **70% line
+coverage**:
+
+1. Read that module's missing lines from the report (Cobertura
+   `<line hits="0">`, LCOV `DA:<n>,0`, JaCoCo `mi="…"`), and map them to the
+   Step 5 entry points they belong to.
+2. Go back to Step 9 for those entry points only, then run Steps 11 to 13
+   again.
+3. Make at most **2 extra passes** per module. Stop early if a pass adds
+   nothing, because then the remaining lines need something no fake can stand
+   in for.
+
+A module still under 70% after that gets a `coverage_shortfall` entry in
+`01-tests.json` (schema below). Each entry names the uncovered entry points or
+line ranges, with a specific reason for each. For example: "lines 2100–2290,
+`google_oauth_callback`: needs a real token exchange, and the handler has no
+seam to fake it".
+- **Never a valid reason:** "Route handlers and DB calls untested". Those are
+  exactly what Step 5's entry-point list and the framework file's fakes exist
+  for.
+- **Coverage can't be measured** (recorded as `null`, see above): no extra
+  passes. Check against the entry-point list instead: every entry point has
+  tests, or appears in `coverage_shortfall`.
+
 ### Step 13a — Record tooling gaps
 
 Every time this run is held back by something missing from the repo's
@@ -347,7 +434,11 @@ test setup, add an entry to `tooling_gaps` (schema below) in both
 
 Name the exact package (or build setting), what it broke, and the version
 that fits — the installed version it must match, when there is one
-(`rules/test-tooling-requirements.md` §3). Say each gap on screen too.
+(`rules/test-tooling-requirements.md` §3). `evidence` is the command you ran
+and the lines of its output that show the gap (Step 5a), never a
+description: "packages not installed in the environment" is a claim, and
+`python -m pip show resemblyzer → WARNING: Package(s) not found: resemblyzer`
+is evidence. Say each gap on screen too.
 
 `/build-context` turns these into section 5 of `.qa/context.md` — the
 "what to install, and how" list a developer actually reads — so be
@@ -370,6 +461,18 @@ incremental CI targets or a user-given `$ARGUMENTS` often only touch one)
 entry (`language`/`framework`/`test_command`/`test_location`/`coverage`)
 byte-for-byte rather than dropping it, so the inventory never loses a
 stack it isn't currently touching.
+
+**A second invocation in the same run merges; it doesn't replace.** If
+`.claude-pipeline/01-tests.json` already exists with this run's `git_sha`,
+this is `/test-pipeline` re-running you after a wrong skip. Read that file
+and update it in place:
+- add to its file lists, `tests_flagged_as_possible_bugs` and
+  `coverage_shortfall`;
+- remove the `modules_skipped` and generate-tests `tooling_gaps` entries for
+  the modules you have now tested;
+- set `stacks.<name>` for the stacks you touched.
+
+Everything the first pass recorded must survive.
 
 ---
 
@@ -524,7 +627,14 @@ added generated tests into, and never flip an existing `false` to `true`.
   "files_modified": ["tests/test_users.py", "tests/conftest.py"],
   "coverage": { "before": 51.0, "after": 67.4 },
   "modules_skipped": [
-    { "path": "src/config.py", "reason": "constants only, nothing to test" }
+    { "path": "src/config.py", "reason": "constants only, nothing to test" },
+    { "path": "src/vision.py", "reason": "imports torch at module level, and torch is not installed",
+      "evidence": "python -c \"import src.vision\" → ModuleNotFoundError: No module named 'torch'" }
+  ],
+  "coverage_shortfall": [
+    { "path": "src/orders.py", "coverage": 64.2, "floor": 70,
+      "uncovered": "lines 210-262, export_orders_to_sftp",
+      "reason": "opens a paramiko SFTP session inline; no seam to fake it without changing the source" }
   ],
   "tests_removed": [
     { "test": "process_refund_partialAmount_updatesLedger",
@@ -544,12 +654,17 @@ added generated tests into, and never flip an existing `false` to `true`.
 test this skill judged to be its own mistake and discarded. The second is a test this skill
 stands behind, left in the suite, failing on purpose.
 
+`evidence` is required on a `modules_skipped` entry whenever the reason is a missing
+package or a failed import (Step 5a), and left out otherwise. `coverage_shortfall` (Step 13)
+is `[]` when every target reached the floor. Each entry names a module that stayed under it
+after the extra passes, its final `coverage`, what is still uncovered, and why.
+
 ### Multi-stack variant — `.claude-pipeline/01-tests.json`
 
 Same idea as the inventory: `language`/`framework`/`test_command`/
 `test_location`/`coverage` move under a `stacks` object, and
-`files_created`/`files_modified`/`modules_skipped`/`tests_removed`/
-`tests_flagged_as_possible_bugs` stay as single flat lists across every
+`files_created`/`files_modified`/`modules_skipped`/`coverage_shortfall`/
+`tests_removed`/`tests_flagged_as_possible_bugs` stay as single flat lists across every
 stack (each entry's path already says which stack it's in — no need to
 duplicate that structurally).
 
@@ -608,7 +723,7 @@ the runner(s) that would fit — and stop. Do not install one or assume a
 default without telling the user.
 
 **A test tool is missing (coverage provider, DOM environment, mocking
-library).** Never install it and never edit the manifest. Work around it
+library).** Prove it with a command first (Step 5a). Never install it and never edit the manifest. Work around it
 where a rule says how (run without coverage, use a hand-written fake),
 skip what genuinely can't be done, and record it in `tooling_gaps` (Step
 13a) so it reaches section 5 of `.qa/context.md`.
@@ -651,6 +766,7 @@ is the loading rule — they must agree.
 - `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/nextjs.md` — route handlers, server actions, middleware, `next/*` mocks
 - `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/frameworks/node-backend.md` — Express/Fastify/NestJS/Koa/Hono, ORMs, `node:test`
 - `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/frameworks/spring-boot.md` — plain unit tests first, `@WebMvcTest` slices, validation, security
+- `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/frameworks/web-backend.md` — FastAPI/Starlette/Flask/Django routes through the test client, DB fakes at the module's seam, real auth, lazily imported heavy libraries
 
 **Tier 2 — when the target calls for it** (Step 1's table says when):
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/cleanly-create-test-data.md` — helpers and builders over inline construction

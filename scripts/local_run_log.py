@@ -168,10 +168,12 @@ def build_log(session_path, run_json):
 
     # One API response is logged as several transcript lines (one per content
     # block) sharing a message id: count and sum each response once.
-    usage, seen, turns, models = {k: 0 for k in USAGE_KEYS}, set(), set(), []
+    usage, seen, turns, models, efforts = {k: 0 for k in USAGE_KEYS}, set(), set(), [], []
     for entry, is_main in [(e, True) for e in main] + [(e, False) for e in sub_entries_all]:
         if entry.get("type") != "assistant":
             continue
+        if is_main and entry.get("effort"):
+            efforts.append(entry["effort"])
         message = entry.get("message") or {}
         key = message.get("id") or entry.get("requestId") or entry.get("uuid")
         if is_main:
@@ -190,6 +192,8 @@ def build_log(session_path, run_json):
     first = next((e for e in main if e.get("cwd")), {})
     init = {"type": "system", "subtype": "init", "cwd": first.get("cwd") or os.getcwd(),
             "model": max(set(models), key=models.count) if models else None,
+            # Forked stages run at the session's effort, so the main thread's is the run's.
+            "effort": max(set(efforts), key=efforts.count) if efforts else None,
             "session_id": first.get("sessionId"), "source": "local-interactive"}
     result = {"type": "result", "subtype": "success", "is_error": False, "num_turns": len(turns),
               "duration_ms": duration_ms, "usage": usage, "total_cost_usd": None,

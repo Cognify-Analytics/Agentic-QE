@@ -70,6 +70,7 @@ jobs:
       # clickup_branch_naming: true    # only if branch names must contain CU-<task id>
       # reminder_days: 7               # days before an unanswered QA issue gets a "still needs attention" comment (0 = never)
       # max_turns: 200                 # raise if runs on a large repo stop early
-      # model: claude-sonnet-5-5       # pin a specific Claude model
+      # model: sonnet                  # default opus writes the deepest tests; sonnet costs less but tests less
+      # effort: medium                 # default high; lower it to trade test depth for cost
 
       clickup_task_id: ${{ inputs.clickup_task_id }}   # leave as it is

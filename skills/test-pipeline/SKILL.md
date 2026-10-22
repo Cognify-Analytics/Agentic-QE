@@ -281,6 +281,26 @@ has useful detail). This is the check the PRD calls out by name — a silent
 failure here would hand Stage 2 nothing to document and Stage 3 nothing
 real to triage.
 
+**Then re-check every skip that blames the environment.** Some skips say a
+package is missing or a module can't be imported. Look for them in
+`01-tests.json`'s `modules_skipped` entries, and in `tooling_gaps` entries
+with `"detected_by": "generate-tests"` that left a module or stack untested.
+For each one, run a single command yourself, in that stack's folder:
+- for an import claim: `python -c "import <module>"`;
+- for a package claim: `python -m pip show <package>` or `npm ls <package>`.
+
+Do this even when the entry has `evidence`. One cheap command per claim is
+how a wrong skip gets caught before it costs a whole stack its tests.
+- **The command fails as claimed:** the skip stands.
+- **It succeeds, because the module imports or the package is installed:**
+  the skip was wrong. Say so on screen, naming the claim and the command
+  that disproved it. Then invoke `/generate-tests` once more, with the
+  wrongly skipped module's path as its target, or the stack's folder if the
+  whole stack was skipped. It merges into this run's `01-tests.json` and
+  inventory (its Step 14). Run the checks above again afterwards.
+  **At most one such re-run per pipeline run.** Anything still wrong after
+  it goes in `summary.md` under "## Needs a human".
+
 ## Stage 2 — `/build-context`
 
 **Skip the invocation entirely when all three of these hold:**
@@ -422,11 +442,14 @@ visible in the repo rather than only in a job log that ages out.
    exactly as in CI. Name the PR instead so the developer knows where it
    went.
 
-   **In CI mode, do not print that reminder** — there is no developer at a
-   terminal to act on it, and the workflow's "Record the run in `.qa/`"
-   step commits `.qa/` itself once every stage has finished. Say where it
-   landed instead: on the PR's own head branch. Test files still travel in
-   `/triage-tests`' auto-fix PR, as before.
+   **In CI mode, do not print that reminder.** There is no developer at a
+   terminal to act on it. The workflow's "Record the run and keep the
+   generated tests" step runs after this session ends. It puts every
+   generated test file that no auto-fix PR carries, together with `.qa/`,
+   in a PR into the branch this run was on. When there are no generated
+   tests, it commits `.qa/` onto that branch instead. Either way, it
+   appends where everything went to `summary.md` itself, so don't guess at
+   branch names or PR links here.
 
 **Expected — `.claude-pipeline/stages.json` (scratch, read by CI telemetry):**
 
@@ -459,6 +482,8 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 ## Tests
 {files created/modified from 01-tests.json, coverage before -> after}
 {tests_flagged_as_possible_bugs count, if any, called out by name}
+{one line per coverage_shortfall entry: "<module> stopped at <coverage>%: <what is uncovered> (<reason>)"}
+{one line per modules_skipped entry that has evidence: "<module> not tested: <reason> (<evidence>)"; and, if Stage 1's skip re-check disproved a claim, say which one and that /generate-tests was re-run}
 
 ## Context
 {"context is current" or which sections were updated}
@@ -478,7 +503,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 
 ## Please commit
 {local runs: the exact file list from Finish step 6 above}
-{CI runs: replace this section with "## Recorded" — say that `.qa/` was committed to the PR's head branch by the workflow, and name any test files travelling in the auto-fix PR}
+{CI runs: replace this section with "## Recorded" as the last section. Write one line: "The workflow keeps the generated tests and `.qa/` once this session ends; where they went is below." Then name any test files travelling in the auto-fix PR (fixes to already-committed tests). The workflow appends the rest under this heading.}
 ```
 
 **Expected — `.qa/runs/<yyyy-mm-dd>-<sha>.json`:**

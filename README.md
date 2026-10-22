@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.3.0**, under active development. All five skills and the
+Version **0.4.0**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -39,7 +39,7 @@ files, and never assumes one. Every language gets the shared rules in
 
 | Language | Rules | Test frameworks | Framework-specific rules | Coverage read from |
 |---|---|---|---|---|
-| Python | `rules/lang/python/` | pytest | — | pytest-cov (Cobertura) |
+| Python | `rules/lang/python/` | pytest | Web backends (FastAPI, Starlette, Flask, Django): routes through the test client, real auth | pytest-cov (Cobertura) |
 | JavaScript / TypeScript | `rules/lang/javascript/` | Jest, Vitest, `node:test` | React, Next.js (App and Pages Router), Node backends (Express, Fastify, NestJS, Koa, Hono) | Cobertura or LCOV (Jest, Vitest, c8, `node --test`) |
 | Java | `rules/lang/jvm/` + `rules/lang/java/` | JUnit 5 (JUnit 4 when that's all there is), AssertJ, Mockito | Spring Boot | JaCoCo (Maven, Gradle) |
 | Kotlin | `rules/lang/jvm/` + `rules/lang/kotlin/` | JUnit 5, Kotest, MockK (or Mockito via mockito-kotlin), coroutines | Spring Boot | JaCoCo or Kover |
@@ -51,7 +51,9 @@ but no language-specific rules yet.
 The pipeline never edits a manifest or build file. Whatever the tests need
 (Jest or Vitest, `@testing-library/*`, `junit-jupiter`, Mockito or MockK,
 a coverage provider) must already be in the repo. If something is missing,
-the run says exactly what, and skips the modules that need it.
+the run says exactly what, and skips the modules that need it. It only
+skips after a command has shown the gap, such as a failed
+`python -c "import main"`, and the summary quotes that output.
 
 **To see what your repo needs**, open section 5, "Test tooling
 requirements", of `.qa/context.md` (written by `/agentic-qe:build-context`).
@@ -230,7 +232,9 @@ those files off your "please commit" list.
 | Issues/PRs assigned to CODEOWNERS | ✅ | ✅ (teams mentioned, not expanded — see below) |
 | PR base | Your branch if pushed, else the default branch | The PR's own head branch |
 | GitHub credentials | Your `gh` login | The workflow's `GITHUB_TOKEN` |
-| `.qa/` committed | By you | By the workflow |
+| Model and effort | Your session's (typically `opus`, `high`) | `opus`, `high` by default (`model`, `effort` inputs) |
+| Generated tests kept | By you (the summary lists the files) | By the workflow, in a PR into the head branch, together with `.qa/` |
+| `.qa/` committed | By you | By the workflow (in the tests PR when there are tests) |
 | Sticky summary comment on the PR | — | ✅ |
 | Cost telemetry | — | ✅ |
 | Step-by-step timeline of what the agent did | — | ✅ |
@@ -285,12 +289,21 @@ locally — mode, live flag, and target list all travel through
 `.claude-pipeline/run.json`, which the workflow writes before the model ever
 runs.
 
-Afterwards the workflow asserts no production source was touched (see
-[The safety check](#the-safety-check)), commits `.qa/` onto the PR's head
-branch, posts a sticky PR comment with `summary.md`, and uploads the
-scratch files as an artifact. SIMPLE test fixes arrive as a separate
-auto-fix PR against the developer's own branch. The pipeline never pushes
-to or merges into a default branch.
+Afterwards the workflow:
+- asserts no production source was touched (see
+  [The safety check](#the-safety-check));
+- keeps the tests the run wrote, together with `.qa/`, in a PR into the
+  PR's head branch (see [Where a run gets recorded](#where-a-run-gets-recorded));
+- posts a sticky PR comment with `summary.md`;
+- uploads the scratch files as an artifact.
+
+Fixes to tests committed by an earlier run arrive as a separate auto-fix
+PR against the developer's own branch. The pipeline never pushes to or
+merges into a default branch.
+
+CI runs on `opus` at `high` effort by default, the same as a typical local
+session, so a CI run tests as deeply as a local one. See
+[Cost and telemetry](#cost-and-telemetry) before changing either.
 
 ### The safety check
 
@@ -307,8 +320,12 @@ changed file into one of these groups:
 | Anything else | Production source, config, lock files | ❌ The job fails |
 
 When it fails, the error annotation lists every file that caused it.
-Because the check fails, `.qa/` isn't recorded for that run, so fix the
-cause and run it again.
+Because the check fails, neither `.qa/` nor the generated tests are
+recorded for that run, so fix the cause and run it again.
+
+The same rules decide which files count as the run's generated tests when
+the workflow commits them (`--list-tests`), so the commit can never include
+a file the safety check didn't allow.
 
 Tests are recognised by their folder or file name, never by what the run
 says it wrote: a check that trusted the model's own report wouldn't check
@@ -458,8 +475,16 @@ letting it happen on someone's first pull request.
    ClickUp task ID in the box first.
 4. Wait for it to finish. Large repos can take up to an hour. A green tick
    means it worked.
-5. It opens a pull request named **"Agentic QE: record run …"**. Merge it.
-   That saves the results, so later runs only test what changed.
+5. It opens a pull request named **"Agentic QE: tests generated at …"**,
+   with the tests it wrote and the `.qa/` record that describes them.
+   Because `live` is still `false`, it's a draft: review it, mark it ready,
+   and merge it. That saves the tests and the results, so later runs only
+   test what changed. If the run wrote no tests, the PR is called
+   **"Agentic QE: record run …"** and holds only `.qa/`.
+
+   Some of the tests may fail on purpose. Each one points at a suspected
+   bug, and the PR lists them. Read
+   [Where a run gets recorded](#where-a-run-gets-recorded) before merging.
 
 From now on it runs by itself when a pull request is opened or marked
 ready for review. Pushing more commits to an open pull request doesn't
@@ -535,12 +560,14 @@ the branch it merges into. For example, take a PR from
 | Which pipeline version runs? | **Neither branch's.** It's this repo, at the ref in `qa.yml`'s `uses:` and `plugin_ref` | Whatever `uses:` names |
 | Whose ClickUp task ID goes into new branch names? | **Head's** | `CU-86bbh0u96` |
 | Where do auto-fix PRs point? | **Into the head branch**, never the base or the default branch | `auto-fix/CU-86bbh0u96-triage-<sha>` → `feature/CU-86bbh0u96-…` |
-| Where is `.qa/` committed? | Straight onto the head branch. It reaches the base when the PR is merged | `feature/CU-86bbh0u96-…` |
+| Where do generated tests go? | With `.qa/`, in a PR from the pipeline's own branch **into the head branch** | `auto-fix/CU-86bbh0u96-qa-baseline-<sha>` → `feature/CU-86bbh0u96-…` |
+| Where is `.qa/` committed? | In that tests PR when there are tests. Otherwise straight onto the head branch. Either way it reaches the base when your PR is merged | `feature/CU-86bbh0u96-…` |
 
 So the chain looks like this:
 
 ```
-auto-fix/CU-86bbh0u96-triage-<sha> ──PR──► feature/CU-86bbh0u96-… ──your PR──► feature/CU-86bbea67d-…
+auto-fix/CU-86bbh0u96-qa-baseline-<sha> ──PR──┐
+auto-fix/CU-86bbh0u96-triage-<sha> ─────PR──┴──► feature/CU-86bbh0u96-… ──your PR──► feature/CU-86bbea67d-…
 ```
 
 The workflow's own commits never start another run. Pushes made with the
@@ -558,7 +585,8 @@ Before Claude starts, the workflow picks a strategy:
 | `triage-only` | There's a baseline, but no source files changed. Nothing new is generated; existing tests are run and triaged |
 
 A branch only has the baseline if it was created, or rebased, after the
-"Agentic QE: record run …" PR was merged.
+pipeline's first PR ("Agentic QE: tests generated at …" or "Agentic QE:
+record run …") was merged.
 
 A **manual run** has no base to compare against. With no baseline it
 bootstraps, which is what you want for the first run (Step 7). With a
@@ -664,7 +692,7 @@ change. A run on `bug/CU-101010-cache-loading` pushes:
 |---|---|---|
 | Test fixes | `auto-fix/triage-a1b2c3d` | `auto-fix/CU-101010-triage-a1b2c3d` |
 | Each bug fix (`fix_bugs`) | `auto-fix/bugfix-issue-9` | `auto-fix/CU-101010-bugfix-issue-9` |
-| `.qa/` baseline (manual run on `main`) | `agentic-qe/qa-baseline-a1b2c3d` | `auto-fix/CU-101010-qa-baseline-a1b2c3d` |
+| Generated tests with `.qa/`, or a `.qa/`-only baseline on `main` | `agentic-qe/qa-baseline-a1b2c3d` | `auto-fix/CU-101010-qa-baseline-a1b2c3d` |
 
 **Option on, no ID found.** For example, a manual run on `main` with the
 box left empty. Any branch the pipeline created would break the naming
@@ -677,7 +705,7 @@ happens:
 | GitHub issues filed for suspected bugs | ✅ Yes (an issue needs no branch) |
 | Test fixes worked out and checked | ✅ Yes, but not committed or pushed |
 | Test-fix PR and bug-fix PRs | ❌ Not opened. The run summary describes what they would contain |
-| `.qa/` baseline branch and PR | ❌ Not pushed. The `.qa/` results are in the run's downloadable artifact |
+| Generated tests and `.qa/` baseline: branch and PR | ❌ Not pushed. Both are in the run's downloadable artifact (tests under `generated-tests/`) |
 | A warning on the job explaining why | ✅ Yes |
 
 To get the branches and PRs, run it again by hand with the task ID in the
@@ -692,53 +720,71 @@ branch named after its task.
   run on `main`, so remember the box for that one.
 - **If both have an ID, the branch name wins.** The box is only a
   fallback.
-- **`.qa/` on a pull request is unaffected.** The workflow commits it onto
-  the developer's own existing branch, which isn't a new branch, so the
-  naming rule doesn't apply.
+- **A `.qa/`-only record on a pull request is unaffected.** The workflow
+  commits it onto the developer's own existing branch, which isn't a new
+  branch, so the naming rule doesn't apply. Generated tests do need a new
+  branch, so they follow the rule like every other branch.
 - All the naming logic lives in `scripts/branch_names.py`. To see what a
   branch name would produce, run
   `python scripts/branch_names.py --branch bug/CU-101010-cache-loading --sha a1b2c3d --clickup`.
 
 ## Where a run gets recorded
 
-A run writes the same `.qa/` output whether it runs locally or in CI — what
-differs is only how it persists.
+A run produces the same output whether it runs locally or in CI: the tests
+it wrote, and `.qa/`. What differs is only how they persist.
 
-**Locally**, `.qa/` lands in your working tree and the pipeline reminds you
-to commit it. It never commits `.qa/` or your own branch on your behalf.
-The only commits it makes are on its own `auto-fix/...` branches, and only
-with `--live`.
+**Locally**, both land in your working tree, and the pipeline lists exactly
+which files to commit. It never commits them, or your own branch, on your
+behalf. The only commits it makes are on its own `auto-fix/...` branches,
+and only with `--live`.
 
-**In CI**, the runner is ephemeral, so the workflow commits `.qa/` itself
-in a dedicated "Record the run in `.qa/`" step:
+**In CI**, the runner is thrown away at the end, so the workflow keeps them
+itself, in a dedicated "Record the run and keep the generated tests" step:
 
-| Trigger | Where `.qa/` lands |
+| The run | What the workflow does |
 |---|---|
-| `pull_request` | Committed straight onto the PR's own head branch, so the record travels with the PR and reaches your default branch when you merge it |
-| `workflow_dispatch` on the default branch | Pushed to `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)) with a PR opened — the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
+| Wrote tests | Commits them **together with** `.qa/` to the pipeline's own branch, `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)). Then it opens a PR into the branch the run was on: the PR's head branch, or the default branch for a manual run there. The PR lists coverage before and after, the tests that fail on purpose with their issues, and what wasn't covered and why |
+| Wrote no tests (`triage-only`, or nothing to test) | Commits `.qa/` alone straight onto the PR's head branch. On the default branch it pushes `agentic-qe/qa-baseline-<sha>` with a PR instead, because the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
 
-This happens in **report-only mode too**. Report-only means no issues are
-filed and none of your code is touched; it does not mean the pipeline
-withholds its own log. The step only touches `.qa/` — never source, never
-tests — and runs only after the "no production source was changed"
-assertion has passed. Test fixes are unaffected: they still travel in
-`/triage-tests`' auto-fix PR.
+Tests and `.qa/` travel together on purpose. `.qa/test-inventory.json`
+names every test file the pipeline owns. Committed without those files, it
+would describe tests the branch doesn't have, and the next run would trust
+it. Tests go through a PR rather than straight onto the branch for two
+reasons: they are code someone should review, and some fail on purpose.
+Each test that fails on purpose points at a suspected bug, and has an
+issue when the run is live.
 
-Three things worth knowing:
+This happens in **report-only mode too**. The tests PR is then opened as a
+**draft**. Report-only means no issues are filed and none of your code is
+touched. It doesn't mean the pipeline throws its own output away. The step
+only ever commits `.qa/` and test files, and only runs after the "no
+production source was changed" assertion has passed.
 
+Things worth knowing:
+
+- Every generated test is also copied into the run artifact, under
+  `generated-tests/`, before anything is pushed. If the push fails, or
+  ClickUp naming blocks every branch, the tests can still be downloaded.
+- A fix `/triage-tests` makes to a test written in the same run stays with
+  that test, in the tests PR. The separate auto-fix PR only carries fixes
+  to tests an earlier run already committed.
+- A re-run at the same commit opens its own PR, on a branch ending in the
+  run ID, and leaves the earlier one alone.
 - A push made with `GITHUB_TOKEN` does not re-trigger workflows, so this
-  cannot loop.
-- If someone pushes to the branch while a run is in progress, the step
-  rebases onto their commit and retries rather than force-pushing.
-- If `.qa/` is listed in the repo's `.gitignore`, nothing can be recorded.
-  The step says so explicitly rather than reporting "no changes" — that
-  entry needs removing, since `.qa/` is meant to be committed.
+  cannot loop. It also means the repo's own CI doesn't start on the tests
+  PR by itself. Push a commit to it, or close and reopen it, to run it.
+- If someone pushes to the head branch while a run is in progress, a
+  `.qa/`-only record rebases onto their commit and retries rather than
+  force-pushing.
+- If `.qa/` is listed in the repo's `.gitignore`, it can't be recorded. The
+  step says so explicitly. That entry needs removing, since `.qa/` is meant
+  to be committed.
 - `/triage-tests` leaves the run on its own `auto-fix/...` branch. Before
-  committing, the step switches back to the commit the run started from,
-  so fix commits only ever reach the developer's branch through the fix PR.
+  committing, the step switches back to the commit the run started from, so
+  fix commits only ever reach the developer's branch through the fix PR.
 
-Getting `.qa/` into the repo is also what keeps runs cheap: without a
-committed baseline, every run bootstraps the whole repo from scratch
+Getting `.qa/` into the repo is also what keeps runs cheap. Until the
+pipeline's PR is merged, every run bootstraps the whole repo from scratch
 instead of running incrementally.
 
 ## Cost and telemetry
@@ -812,20 +858,45 @@ There are two ways to run locally:
   stream-json` with CI's tool allowlist and turn limit, prints one line per
   step as it goes, then builds every file in the table, cost included.
   Arguments it doesn't recognise (`--live`, `--fix-bugs`, a target path)
-  are passed to the pipeline. `--max-turns`, `--model` and `--plugin-dir`
-  work like the CI inputs.
+  are passed to the pipeline. `--max-turns`, `--model`, `--effort` and
+  `--plugin-dir` work like the CI inputs, with the same defaults.
 
 Every `telemetry.json` has a `source` field (`ci`, `local-headless` or
 `local-interactive`), and a `cost_source` that says where the cost came
 from, or why it's missing.
 
-**If you want to tune further:** the `model` input sets `--model` for the
-whole pipeline. Measure before reaching for it — an Opus→Sonnet swap
-observed here moved a run from $1.90 to $1.19, far less than the ~5x
-price difference would suggest, which is exactly what tells you the run is
-volume-bound rather than price-bound. Note also that `max_turns` is a
-ceiling that stops a runaway run; lowering it does not make a normal run
-cheaper.
+### Model and effort
+
+CI runs on `opus` at `high` effort by default. That matches a typical
+local session (`"model": "opus"` and `"effortLevel": "high"` in Claude
+Code's settings), so a CI run tests as deeply as a local one. Forked stages
+run at the session's model and effort, so the two inputs, `model` and
+`effort`, cover every stage. Both are in the telemetry and in the run-cost
+table, so two runs can be compared like for like.
+
+You can lower either one to save money, but measure before you do. The
+same bootstrap on the same multi-stack repo (FastAPI backend, FastAPI voice
+service, Next.js frontend) ran twice:
+
+| | Sonnet, CLI default effort (CI before 0.4.0) | Opus, `high` effort (local session) |
+|---|---|---|
+| Backend tests | 140, helper functions only, no route called | 283, with ~150 route calls through the test client |
+| Backend coverage | 27.5% | 78.2% |
+| Voice service | Skipped, on a false "packages not installed" claim | 64 tests, 87.1% |
+| Suspected bugs found | 1 | 4 |
+
+The three bugs only the deeper run found were all in routes and auth
+middleware, which helper-level tests can't reach.
+
+Two things narrow the gap whatever the model: the rules now require route
+tests and set a coverage floor, and every skip needs command output as
+proof. The model still decides how much of that work gets done well.
+
+A run is volume-bound rather than price-bound. An Opus→Sonnet swap observed
+earlier moved a run from $1.90 to $1.19, far less than the ~5x price
+difference suggests. So the cheaper model saves less than it looks like it
+will, and costs you tests. Note also that `max_turns` is a ceiling that
+stops a runaway run; lowering it does not make a normal run cheaper.
 
 ## Seeing what the agent did
 
@@ -866,7 +937,7 @@ tooling.
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` — the plugin/marketplace manifests that make one-step install possible
 - `skills/` — the five skills (`follow-up-issues`, `generate-tests`, `build-context`, `triage-tests`, `test-pipeline`)
 - `rules/` — the single shared source of testing rules and conventions, read by the skills:
-  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends and Spring Boot), `error-classification.md` for triage, `context-file-template.md` and `qa-workflow-template.md` for the two files `/build-context` writes
+  `general/` for every language, `lang/<language>/` per language (with `frameworks/` for React, Next.js, Node backends, Spring Boot and Python web backends), `error-classification.md` for triage, `context-file-template.md` and `qa-workflow-template.md` for the two files `/build-context` writes
 - `templates/` — the GitHub issue and bug-fix PR templates, and the generic caller workflow to copy into a target repo (`/build-context` also writes a copy tuned to the repo, in `.qa/`)
 - `scripts/` — helper scripts the skills shell out to:
   - `parse_coverage.py` — turns Cobertura, JaCoCo or LCOV coverage reports (one, or one per module) into the coverage JSON `.qa/test-inventory.json` uses
@@ -877,7 +948,8 @@ tooling.
   - `collect_telemetry.py` — builds `telemetry.json` and the run-cost block, the same way for CI and local runs
   - `local_run_log.py` — turns the Claude Code session that ran the pipeline into a CI-shaped execution log
   - `run_local.py` — runs the pipeline headless on your machine, exactly as CI does, cost included
-  - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check))
+  - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check)); with `--list-tests`, also what decides which generated tests the workflow commits
+  - `render_tests_pr.py` — writes the PR that carries a CI run's generated tests: coverage, tests failing on purpose with their issues, and what wasn't covered
 - `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
