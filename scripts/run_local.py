@@ -23,6 +23,8 @@ Writes, in .claude-pipeline/:
     run-summary.md       what CI puts on the job summary page: run cost + timeline
     trace.md             the full step-by-step trace
     summary.md           the pipeline's own summary (CI: the PR comment)
+
+and, to commit, the run's record in .qa/runs/ (scripts/record_run.py).
 """
 
 import argparse
@@ -102,11 +104,14 @@ def main():
                     "--summary", summary_path])
     subprocess.run([py, os.path.join(HERE, "render_trace.py"), log_path, "--pipeline-dir", PIPELINE_DIR,
                     "--summary", summary_path, "--out", os.path.join(PIPELINE_DIR, "trace.md")])
+    # The committed part: .claude-pipeline/ is scratch, .qa/runs/ is what teammates see.
+    subprocess.run([py, os.path.join(HERE, "record_run.py"), "--pipeline-dir", PIPELINE_DIR, "--qa-dir", ".qa"])
 
     print()
     for name in ("summary.md", "run-summary.md", "trace.md", "telemetry.json"):
         path = os.path.join(PIPELINE_DIR, name)
         print(f"  {'written' if os.path.exists(path) else 'missing'}: {path}")
+    print("  Commit the new files in .qa/runs/: they are this run's only record outside your machine.")
     return 0 if code == 0 else code
 
 

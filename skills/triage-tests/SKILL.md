@@ -460,9 +460,9 @@ the would-be base.
 folder is recorded separately — by the CI workflow's own "Record the run in
 `.qa/`" step, which runs after every stage has finished, and by the
 developer's own commit when running locally. The reason is a timing one:
-`.qa/runs/<date>-<sha>.json` is written by `/test-pipeline`'s Finish
-section, which runs *after* this stage, so it does not exist yet at this
-point in the run. Committing `.qa/` from here would silently miss the run
+the run's record in `.qa/runs/` is written by `scripts/record_run.py` after
+`/test-pipeline`'s Finish section, which runs *after* this stage, so it does
+not exist yet at this point in the run. Committing `.qa/` from here would silently miss the run
 record every time, and would now also duplicate what the workflow commits.
 
 Only fixes to already-tracked test files are committed here. Fixes to test

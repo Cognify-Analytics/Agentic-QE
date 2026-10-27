@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.0**, under active development. All five skills and the
+Version **0.4.1**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -184,7 +184,10 @@ From the target repo (it must be a git repo):
 
 The pipeline writes its scratch files to `.claude-pipeline/` (added to
 `.gitignore` for you) and its durable output to `.qa/`, which is meant to
-be committed. At the end it lists exactly which files to commit.
+be committed. At the end it lists exactly which files to commit. They
+include the run's record in `.qa/runs/`, the only part of a local run your
+teammates will ever see (see [What a run leaves
+behind](#what-a-run-leaves-behind)).
 
 ### Filing issues and PRs from your machine
 
@@ -234,7 +237,8 @@ those files off your "please commit" list.
 | GitHub credentials | Your `gh` login | The workflow's `GITHUB_TOKEN` |
 | Model and effort | Your session's (typically `opus`, `high`) | `opus`, `high` by default (`model`, `effort` inputs) |
 | Generated tests kept | By you (the summary lists the files) | By the workflow, in a PR into the head branch, together with `.qa/` |
-| `.qa/` committed | By you | By the workflow (in the tests PR when there are tests) |
+| Run record (`.qa/runs/`) | Written for you, committed by you | Committed by the workflow straight onto the head branch |
+| Rest of `.qa/` committed | By you | By the workflow (in the tests PR when there are tests) |
 | Sticky summary comment on the PR | — | ✅ |
 | Cost telemetry | — | ✅ |
 | Step-by-step timeline of what the agent did | — | ✅ |
@@ -730,6 +734,38 @@ branch named after its task.
 
 ## Where a run gets recorded
 
+### What a run leaves behind
+
+A run writes two kinds of output. **Scratch** goes in `.claude-pipeline/`:
+raw execution logs (hundreds of KB), raw test output, stage hand-off files,
+telemetry, and the step-by-step trace. It is rewritten every run and
+gitignored. It's too large and too raw to commit: the logs contain command
+output and environment details. In CI it disappears with the runner, apart
+from the artifacts. **Durable output** goes in `.qa/` and is committed. It
+is the only part of a run your teammates ever see, so everything worth
+knowing later is distilled into it:
+
+| File | What it holds | Changes |
+|---|---|---|
+| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.md` | The run, for people. When, where and by whom it ran, the model and effort, how long it took and the turns, tokens and cost. Then the run summary: tests written, coverage, failures, what needs a human. Then every failure with its verdict and the reasoning behind it, every issue and PR it filed or touched, and drafted issues when the run was report-only. It ends with a table of the earlier runs recorded on the branch | Added once per run, never edited |
+| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.json` | The same for scripts, telemetry included | Added once per run, never edited |
+| `.qa/runs/README.md` | What the folder is and how to read it | Written once |
+| `.qa/test-inventory.json`, `.qa/context.md` | The current state: which tests exist and what's covered, and what the project does | Updated in place |
+
+To see what happened in past runs, open `.qa/runs/` on GitHub and read
+the newest `.md`. Its "Earlier runs" table links to the ones before it.
+Names carry the UTC start time, so they sort in run order, and a re-run
+at the same commit never overwrites an earlier record. Every run only adds
+files, so two branches recording runs never conflict.
+
+`scripts/record_run.py` builds the record the same way for every kind of
+run, after telemetry is collected. A CI run's full trace stays in its
+`qa-telemetry-<run id>` artifact for 90 days, and the record links to the
+run. A local run's trace stays in `.claude-pipeline/` on the machine that
+ran it.
+
+### Locally and in CI
+
 A run produces the same output whether it runs locally or in CI: the tests
 it wrote, and `.qa/`. What differs is only how they persist.
 
@@ -743,8 +779,8 @@ itself, in a dedicated "Record the run and keep the generated tests" step:
 
 | The run | What the workflow does |
 |---|---|
-| Wrote tests | Commits them **together with** `.qa/` to the pipeline's own branch, `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)). Then it opens a PR into the branch the run was on: the PR's head branch, or the default branch for a manual run there. The PR lists coverage before and after, the tests that fail on purpose with their issues, and what wasn't covered and why |
-| Wrote no tests (`triage-only`, or nothing to test) | Commits `.qa/` alone straight onto the PR's head branch. On the default branch it pushes `agentic-qe/qa-baseline-<sha>` with a PR instead, because the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
+| Wrote tests | First, it commits the run record (`.qa/runs/`) straight onto the PR's head branch, so the history of what the run found and filed survives even if the tests are never merged. Then it commits the tests **together with** the rest of `.qa/` to the pipeline's own branch, `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)), and opens a PR into the branch the run was on: the PR's head branch, or the default branch for a manual run there. The PR lists coverage before and after, the tests that fail on purpose with their issues, and what wasn't covered and why |
+| Wrote no tests (`triage-only`, or nothing to test) | Commits `.qa/` alone, run record included, straight onto the PR's head branch. On the default branch it pushes `agentic-qe/qa-baseline-<sha>` with a PR instead, because the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
 
 Tests and `.qa/` travel together on purpose. `.qa/test-inventory.json`
 names every test file the pipeline owns. Committed without those files, it
@@ -818,9 +854,10 @@ It's surfaced in three places:
   14-day scratch artifact, because cost trends only become readable across
   dozens of runs
 
-The committed run record in `.qa/runs/<date>-<sha>.json` carries the
-strategy and per-stage outcomes too, locally and in CI. Join it to a
-`telemetry.json` on `sha` to get the full picture.
+Every run's telemetry is also written into its committed record in
+`.qa/runs/`, locally and in CI (see [What a run leaves
+behind](#what-a-run-leaves-behind)). The artifacts expire; the records
+don't, so cost and depth trends can be read from git history.
 
 ### Local runs get the same telemetry and summaries
 
@@ -950,6 +987,7 @@ tooling.
   - `run_local.py` — runs the pipeline headless on your machine, exactly as CI does, cost included
   - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check)); with `--list-tests`, also what decides which generated tests the workflow commits
   - `render_tests_pr.py` — writes the PR that carries a CI run's generated tests: coverage, tests failing on purpose with their issues, and what wasn't covered
+  - `record_run.py` — writes each run's committed record in `.qa/runs/` (a readable `.md` and a `.json` with telemetry), the same way for CI and local runs
 - `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 

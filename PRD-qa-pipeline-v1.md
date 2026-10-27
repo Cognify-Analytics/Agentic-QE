@@ -614,7 +614,9 @@ STAGE 3  run /triage-tests
 
 FINISH
   read all of them, print a summary, save it to .claude-pipeline/summary.md
-  copy the run record to .qa/runs/<date>-<sha>.json
+  write the run record to .claude-pipeline/run-record.json; after telemetry,
+    scripts/record_run.py turns it into the committed .qa/runs/<date>-<hhmm>-<sha>.md
+    and .json (who, where, model, findings and why, issues and PRs, earlier runs)
   remind the developer to commit .qa/ along with the new tests
 ```
 

@@ -408,6 +408,20 @@ jobs:
             --summary "$GITHUB_STEP_SUMMARY" \
             --out .claude-pipeline/trace.md || true
 
+      # The run's durable record in .qa/runs/. .claude-pipeline/ is scratch and
+      # leaves with the runner; this is what a teammate reads about the run later:
+      # where and on what it ran, what it found and why, what it filed, and the runs
+      # before it. Built after telemetry, by the same script a local run uses, so
+      # local and CI records match.
+      - name: Write the run record
+        if: always() && steps.claude.outcome != '' && steps.claude.outcome != 'skipped'
+        env:
+          ACTOR: ${{ github.actor }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python .agentic-qe/scripts/record_run.py --pipeline-dir .claude-pipeline --qa-dir .qa \
+            --actor "$ACTOR" --event "$EVENT" || true
+
       - name: Assert no production source was changed
         id: assert
         if: always()
@@ -435,20 +449,24 @@ jobs:
       # the tests it generated.
       #
       # This is deliberately a workflow step rather than a model instruction. It runs
-      # after every stage has finished, so .qa/runs/<date>-<sha>.json — which the
-      # orchestrator only writes at the very end — is actually on disk by the time
-      # anything commits it. /triage-tests used to be asked to commit that file from
-      # Stage 3, before it existed, which is why CI runs recorded nothing.
+      # after every stage has finished and after "Write the run record", so the run's
+      # record in .qa/runs/ is actually on disk by the time anything commits it.
+      # /triage-tests used to be asked to commit .qa/ from Stage 3, before the record
+      # existed, which is why CI runs recorded nothing.
       #
       # Where it goes:
+      #   - The run record (.qa/runs/) always goes straight onto a non-default head
+      #     branch, so the history of what each run found and filed survives even if
+      #     its tests PR is never merged.
       #   - Generated tests that no auto-fix PR already carries leave together with
-      #     .qa/, on the pipeline's own branch, in a PR into the branch the run was
-      #     on (a draft in report-only mode). Together, so the inventory never names
-      #     a test file the branch doesn't have. Through a PR, because tests are code
-      #     a person reviews. Before this, a run with no SIMPLE fixes threw its tests
-      #     away and still committed an inventory that described them.
-      #   - No generated tests: .qa/ alone, committed onto the PR's head branch, or
-      #     pushed with a PR when the run was on the default branch.
+      #     the rest of .qa/ (inventory, context), on the pipeline's own branch, in a
+      #     PR into the branch the run was on (a draft in report-only mode). Together,
+      #     so the inventory never names a test file the branch doesn't have. Through
+      #     a PR, because tests are code a person reviews. Before this, a run with no
+      #     SIMPLE fixes threw its tests away and still committed an inventory that
+      #     described them.
+      #   - No generated tests: .qa/ alone, committed onto the head branch, or pushed
+      #     with a PR when the run was on the default branch.
       #
       # Runs in report-only mode too: report-only is about not filing issues and not
       # touching the developer's code, not about throwing away the pipeline's own
@@ -533,27 +551,56 @@ jobs:
           fi
 
           SHA=$(git rev-parse --short HEAD)
+          ON_HEAD=false
+          if [ -n "${HEAD_BRANCH}" ] && [ "${HEAD_BRANCH}" != "${DEFAULT_BRANCH}" ]; then ON_HEAD=true; fi
 
-          # .qa/ alone, on a non-default branch: commit straight onto that branch, so
-          # the record travels with the developer's PR and reaches the default branch
-          # when they merge it. A GITHUB_TOKEN push does not re-trigger workflows, so
-          # no loop.
-          if [ "$TEST_COUNT" -eq 0 ] && [ -n "${HEAD_BRANCH}" ] && [ "${HEAD_BRANCH}" != "${DEFAULT_BRANCH}" ]; then
+          # Commit straight onto the head branch, so the record travels with the
+          # developer's PR and reaches the default branch when they merge it. If
+          # someone pushed meanwhile, rebase onto them and retry, never force. A
+          # GITHUB_TOKEN push does not re-trigger workflows, so no loop.
+          push_to_head() {
+            for attempt in 1 2 3; do
+              if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then return 0; fi
+              echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
+              git fetch --no-tags origin "${HEAD_BRANCH}" || true
+              git rebase --autostash "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
+              sleep 3
+            done
+            return 1
+          }
+
+          # No generated tests, on a non-default branch: all of .qa/ goes onto it.
+          if [ "$TEST_COUNT" -eq 0 ] && [ "$ON_HEAD" = true ]; then
             git commit -q \
               -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
               -m "Only .qa/ is touched — no production source, no tests. Run: ${RUN_URL}"
-            for attempt in 1 2 3; do
-              if git push -q origin "HEAD:refs/heads/${HEAD_BRANCH}"; then
-                note "Recorded \`.qa/\` on \`${HEAD_BRANCH}\`. No generated tests to keep."
-                exit 0
-              fi
-              echo "Push rejected (attempt ${attempt}) — the branch moved during the run; rebasing."
-              git fetch --no-tags origin "${HEAD_BRANCH}" || true
-              git rebase "origin/${HEAD_BRANCH}" || git rebase --abort 2>/dev/null || true
-              sleep 3
-            done
-            echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+            if push_to_head; then
+              note "Recorded \`.qa/\` on \`${HEAD_BRANCH}\`, including the run record in \`.qa/runs/\`. No generated tests to keep."
+            else
+              echo "::warning::Could not record .qa/ on ${HEAD_BRANCH} after 3 attempts — the record is in the run artifact only."
+            fi
             exit 0
+          fi
+
+          # Generated tests, on a non-default branch: the run's record in .qa/runs/
+          # goes onto the branch now, and the tests (with the inventory and context
+          # that describe them) go into a PR built on top of it. The record is only
+          # ever added, never describes files the branch lacks, and must survive a
+          # tests PR that is closed without merging: it is the history of what the
+          # run found and filed.
+          if [ "$ON_HEAD" = true ] && ! git diff --cached --quiet -- .qa/runs/ 2>/dev/null; then
+            git commit -q --only \
+              -m "chore(qa): record Agentic QE run ${SHA} [skip ci]" \
+              -m "Only .qa/runs/ — the run's record. Its generated tests are in a separate PR. Run: ${RUN_URL}" \
+              -- .qa/runs/
+            if push_to_head; then
+              note "Recorded the run in \`.qa/runs/\` on \`${HEAD_BRANCH}\`."
+            else
+              echo "::warning::Could not push the run record to ${HEAD_BRANCH}; it travels in the tests PR instead."
+            fi
+            # A rebase's autostash can leave the rest unstaged: stage it again.
+            git add -- .qa/ 2>/dev/null || true
+            git --literal-pathspecs add --pathspec-from-file="$TESTS" 2>/dev/null || true
           fi
 
           # Everything else goes on the pipeline's own branch, with a PR: generated
@@ -668,10 +715,14 @@ jobs:
           retention-days: 14
 
       # Telemetry outlives the scratch artifact on purpose: cost trends only become
-      # readable across dozens of runs, which is well past 14 days.
+      # readable across dozens of runs, which is well past 14 days. The trace rides
+      # along, because the committed run record in .qa/runs/ points readers here
+      # for the step-by-step detail.
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: qa-telemetry-${{ github.run_id }}
-          path: .claude-pipeline/telemetry.json
+          path: |
+            .claude-pipeline/telemetry.json
+            .claude-pipeline/trace.md
           retention-days: 90
