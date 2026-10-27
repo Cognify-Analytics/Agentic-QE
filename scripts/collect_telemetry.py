@@ -16,7 +16,7 @@ run produce the same file, with the same fields, worked out the same way:
 Usage:
     python scripts/collect_telemetry.py --execution-file LOG --source ci|local-headless|local-interactive
         [--pipeline-dir .claude-pipeline] [--outcome success|failure|skipped|]
-        [--repo org/repo] [--run-id ID] [--run-url URL] [--model NAME] [--max-turns N]
+        [--repo org/repo] [--run-id ID] [--run-url URL] [--model NAME] [--effort LEVEL] [--max-turns N]
         [--summary FILE] [--github-output FILE] [--github]
 
 Writes <pipeline-dir>/telemetry.json. --summary appends the "run cost" block
@@ -108,6 +108,15 @@ def model_used(messages):
     return None
 
 
+def effort_used(messages):
+    # Only the local-interactive log carries it (local_run_log.py copies it from
+    # the transcript); a stream-json log doesn't, so CI and run_local.py pass --effort.
+    for msg in messages:
+        if isinstance(msg, dict) and msg.get("type") == "system" and msg.get("subtype") == "init" and msg.get("effort"):
+            return msg["effort"]
+    return None
+
+
 def build(args):
     pdir = args.pipeline_dir
     run = load_json(os.path.join(pdir, "run.json")) or {}
@@ -150,6 +159,7 @@ def build(args):
         "fix_bugs": run.get("fix_bugs"),
         "model": args.model or model_used(messages) or "unknown",
         "model_used": model_used(messages),
+        "effort": args.effort or effort_used(messages),
         "max_turns": args.max_turns,
         "cost_usd": cost,
         "cost_source": cost_source,
@@ -179,6 +189,7 @@ def cost_block(telemetry):
         f"| Turns | `{show(telemetry.get('num_turns'))}` |",
         f"| Strategy | `{show(telemetry.get('strategy'))}` |",
         f"| Model | `{show(telemetry.get('model'))}` |",
+        f"| Effort | `{show(telemetry.get('effort'))}` |",
         f"| Run | `{telemetry.get('source')}` |",
         "",
         "<details><summary>Full telemetry JSON</summary>",
@@ -202,7 +213,8 @@ def main():
     parser.add_argument("--repo", default="")
     parser.add_argument("--run-id", default="")
     parser.add_argument("--run-url", default="")
-    parser.add_argument("--model", default="", help="CI: the model input, or 'action-default'")
+    parser.add_argument("--model", default="", help="CI: the model input")
+    parser.add_argument("--effort", default="", help="CI: the effort input")
     parser.add_argument("--max-turns", type=int, default=None)
     parser.add_argument("--summary", help="append the run-cost Markdown block here")
     parser.add_argument("--github-output", help="append cost= and turns= here ($GITHUB_OUTPUT)")

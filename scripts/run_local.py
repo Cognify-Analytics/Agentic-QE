@@ -12,7 +12,7 @@ these files, but session transcripts record tokens, not cost.
 
 Usage (from the target repo's root):
     python <agentic-qe>/scripts/run_local.py [pipeline args...]
-        [--max-turns 150] [--model NAME] [--plugin-dir <agentic-qe>]
+        [--max-turns 150] [--model opus] [--effort high] [--plugin-dir <agentic-qe>]
 
     pipeline args are passed to /test-pipeline as typed: --live, --fix-bugs,
     --clickup-branches, a target file or folder.
@@ -23,6 +23,8 @@ Writes, in .claude-pipeline/:
     run-summary.md       what CI puts on the job summary page: run cost + timeline
     trace.md             the full step-by-step trace
     summary.md           the pipeline's own summary (CI: the PR comment)
+
+and, to commit, the run's record in .qa/runs/ (scripts/record_run.py).
 """
 
 import argparse
@@ -56,7 +58,8 @@ def progress(line):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--max-turns", type=int, default=150, help="same default as the CI workflow")
-    parser.add_argument("--model", default="", help="leave empty for the CLI's default")
+    parser.add_argument("--model", default="opus", help="same default as the CI workflow")
+    parser.add_argument("--effort", default="high", help="same default as the CI workflow")
     parser.add_argument("--plugin-dir", default="", help="a local Agentic-QE checkout, instead of the installed plugin")
     args, pipeline_args = parser.parse_known_args()
 
@@ -76,6 +79,8 @@ def main():
            "--max-turns", str(args.max_turns), "--allowedTools", ALLOWED_TOOLS]
     if args.model:
         cmd += ["--model", args.model]
+    if args.effort:
+        cmd += ["--effort", args.effort]
     if args.plugin_dir:
         cmd += ["--plugin-dir", args.plugin_dir]
 
@@ -94,15 +99,19 @@ def main():
     py = sys.executable
     subprocess.run([py, os.path.join(HERE, "collect_telemetry.py"), "--execution-file", log_path,
                     "--source", "local-headless", "--outcome", outcome, "--pipeline-dir", PIPELINE_DIR,
-                    "--model", args.model or "cli-default", "--max-turns", str(args.max_turns),
+                    "--model", args.model or "cli-default", "--effort", args.effort,
+                    "--max-turns", str(args.max_turns),
                     "--summary", summary_path])
     subprocess.run([py, os.path.join(HERE, "render_trace.py"), log_path, "--pipeline-dir", PIPELINE_DIR,
                     "--summary", summary_path, "--out", os.path.join(PIPELINE_DIR, "trace.md")])
+    # The committed part: .claude-pipeline/ is scratch, .qa/runs/ is what teammates see.
+    subprocess.run([py, os.path.join(HERE, "record_run.py"), "--pipeline-dir", PIPELINE_DIR, "--qa-dir", ".qa"])
 
     print()
     for name in ("summary.md", "run-summary.md", "trace.md", "telemetry.json"):
         path = os.path.join(PIPELINE_DIR, name)
         print(f"  {'written' if os.path.exists(path) else 'missing'}: {path}")
+    print("  Commit the new files in .qa/runs/: they are this run's only record outside your machine.")
     return 0 if code == 0 else code
 
 

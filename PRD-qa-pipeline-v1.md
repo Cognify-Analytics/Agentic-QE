@@ -273,18 +273,18 @@ context: fork
 2. Work out the stack. Look at manifest files to find the language, the test framework, and the test command. If there is no test framework, say so and stop.
 3. Work out where tests go, using the order in Section 6.2.
 4. Read `.qa/test-inventory.json` if it exists. This tells you what already has tests without scanning the whole repo.
-5. Pick what to test. If the user gave a target, use it. If not, list the modules with no tests and rank them — business logic and entry points first, config and simple data classes last. Take the top 20.
+5. Pick what to test. If the user gave a target, use it. If not, list the modules with no tests and rank them — business logic and entry points first, config and simple data classes last. Take the top 20. Then list each target's entry points (public functions; for a web app, every route, middleware and webhook) — they, not the file, are what gets planned and covered. Before skipping anything for a missing package or a failed import, prove it with a command (`python -c "import main"`, `pip show`, `npm ls`) and record the output as evidence.
 6. Read the dependencies. Follow the imports and read the actual types the target uses. **Do not skip this.** It is the difference between tests that compile and tests that invent method names.
 7. Check for existing tests for this specific target. If a test file exists, read it and add to it — do not make a second file. If none exists, read 2–3 nearby test files to learn the house style.
 8. Check for existing test data builders (`conftest.py`, factories, builder classes). Add to them rather than duplicating.
-9. List the test cases in Given-When-Then form, naming which code branch each one covers. Name format: `{method}_{state}_{outcome}`.
+9. List the test cases in Given-When-Then form, naming which code branch each one covers, for every entry point from step 5. Routes are tested through the framework's test client (success, validation, 401/403, not-found, downstream failures). Name format: `{method}_{state}_{outcome}`.
 10. Ask the user to approve the list. **Skip this step when running in pipeline mode.**
 11. Write the test code, in the location from step 3.
 12. Verify twice. First compile — up to 5 attempts. Then run — up to 3 fix attempts per test. If a test still fails after 3 attempts, delete it and say so.
-13. Get coverage by running `scripts/parse_coverage.py`.
+13. Get coverage by running `scripts/parse_coverage.py`. A module under 70% line coverage goes back to step 9 for its uncovered entry points (at most 2 extra passes); one still under after that is recorded in `coverage_shortfall` with a specific reason.
 14. Update `.qa/test-inventory.json` and write `01-tests.json`.
 
-**Limits:** 20 modules per run. 5 compile attempts. 3 fix attempts per test.
+**Limits:** 20 modules per run. 5 compile attempts. 3 fix attempts per test. 2 extra coverage passes per module.
 
 **Hard rules:**
 - May only create or change files in the test location and its builders
@@ -614,7 +614,9 @@ STAGE 3  run /triage-tests
 
 FINISH
   read all of them, print a summary, save it to .claude-pipeline/summary.md
-  copy the run record to .qa/runs/<date>-<sha>.json
+  write the run record to .claude-pipeline/run-record.json; after telemetry,
+    scripts/record_run.py turns it into the committed .qa/runs/<date>-<hhmm>-<sha>.md
+    and .json (who, where, model, findings and why, issues and PRs, earlier runs)
   remind the developer to commit .qa/ along with the new tests
 ```
 

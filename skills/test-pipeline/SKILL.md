@@ -281,6 +281,26 @@ has useful detail). This is the check the PRD calls out by name — a silent
 failure here would hand Stage 2 nothing to document and Stage 3 nothing
 real to triage.
 
+**Then re-check every skip that blames the environment.** Some skips say a
+package is missing or a module can't be imported. Look for them in
+`01-tests.json`'s `modules_skipped` entries, and in `tooling_gaps` entries
+with `"detected_by": "generate-tests"` that left a module or stack untested.
+For each one, run a single command yourself, in that stack's folder:
+- for an import claim: `python -c "import <module>"`;
+- for a package claim: `python -m pip show <package>` or `npm ls <package>`.
+
+Do this even when the entry has `evidence`. One cheap command per claim is
+how a wrong skip gets caught before it costs a whole stack its tests.
+- **The command fails as claimed:** the skip stands.
+- **It succeeds, because the module imports or the package is installed:**
+  the skip was wrong. Say so on screen, naming the claim and the command
+  that disproved it. Then invoke `/generate-tests` once more, with the
+  wrongly skipped module's path as its target, or the stack's folder if the
+  whole stack was skipped. It merges into this run's `01-tests.json` and
+  inventory (its Step 14). Run the checks above again afterwards.
+  **At most one such re-run per pipeline run.** Anything still wrong after
+  it goes in `summary.md` under "## Needs a human".
+
 ## Stage 2 — `/build-context`
 
 **Skip the invocation entirely when all three of these hold:**
@@ -348,18 +368,19 @@ of. Before stopping at any gate above, write both:
 
 1. `.claude-pipeline/stages.json` — the stages that ran, and
    `"not_reached"` for the rest.
-2. `.qa/runs/<yyyy-mm-dd>-<sha>.json` — the same run record as a normal
+2. `.claude-pipeline/run-record.json` — the same run record as a normal
    finish (schema below), with `"status": "stopped"`, a `"stopped_at"`
    naming the gate that failed (e.g. `"stage-1-check"`), and a one-line
    `"reason"`. Fill in whatever is genuinely known and leave the rest out
-   rather than guessing at numbers no stage produced.
+   rather than guessing at numbers no stage produced. Write `summary.md`
+   too, saying where and why the run stopped.
 
-3. **Local runs:** the telemetry and timeline from Finish step 5. In CI the
-   workflow builds them on every run, halted or not, and a local run must
-   match.
+3. **Local runs:** Finish step 5: the telemetry, the timeline and the
+   committed run record in `.qa/runs/`. In CI the workflow builds them on
+   every run, halted or not, and a local run must match.
 
-Then report what failed on screen and stop. In CI the workflow commits
-that record the same way it would a successful run, so a halted run is
+Then report what failed on screen and stop. The run record lands in
+`.qa/runs/` the same way a successful run's does, so a halted run is
 visible in the repo rather than only in a job log that ages out.
 
 ---
@@ -376,16 +397,22 @@ visible in the repo rather than only in a job log that ages out.
 2. Read `run.json`, `00-followup.json`, `01-tests.json`, `.qa/context.md`, and `03-triage.json` (whichever exist; a `follow-up-only` run has only the first two).
 3. Write `.claude-pipeline/summary.md` (shape below).
 4. **Skip this step for a `follow-up-only` run**, which writes nothing under
-   `.qa/`. Otherwise, copy a compact run record to `.qa/runs/<yyyy-mm-dd>-<sha>.json` — not the
-   full scratch detail, just enough for a team to see pipeline history at a
-   glance (see schema below). Create `.qa/runs/` if it doesn't exist.
-5. **Telemetry and the "what the agent did" timeline: local runs only.**
-   CI builds these in the workflow after the session ends. Skip this step
-   when `run.json`'s `"mode"` is `"ci"`, and when the environment variable
-   `AGENTIC_QE_TELEMETRY` is `external` (`scripts/run_local.py` set it: it
-   builds them itself afterwards, from the complete log, cost included).
-   Otherwise run these three commands, in this order, from the repo root.
-   They are the same scripts CI uses, so the files match CI's:
+   `.qa/`. Otherwise, write the compact run record to
+   `.claude-pipeline/run-record.json` (see schema below). These are the
+   fields only you can judge, such as `context_action`. You don't write
+   anything under `.qa/runs/` yourself. `scripts/record_run.py` does that
+   after telemetry is built (step 5 locally, the workflow in CI). It adds
+   telemetry, who and where, every issue and PR, the classification
+   reasons, `summary.md` and a history of earlier runs, and names the file
+   uniquely.
+5. **Telemetry, the "what the agent did" timeline, and the committed run
+   record: local runs only.** CI builds these in the workflow after the
+   session ends. Skip this step when `run.json`'s `"mode"` is `"ci"`, and
+   when the environment variable `AGENTIC_QE_TELEMETRY` is `external`
+   (`scripts/run_local.py` set it: it builds them itself afterwards, from
+   the complete log, cost included). Otherwise run these four commands, in
+   this order, from the repo root. They are the same scripts CI uses, so
+   the files match CI's:
 
    ```bash
    rm -f .claude-pipeline/run-summary.md
@@ -394,6 +421,7 @@ visible in the repo rather than only in a job log that ages out.
      --source local-interactive --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md
    python "${CLAUDE_PLUGIN_ROOT}/scripts/render_trace.py" .claude-pipeline/execution-log.json \
      --pipeline-dir .claude-pipeline --summary .claude-pipeline/run-summary.md --out .claude-pipeline/trace.md
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/record_run.py" --pipeline-dir .claude-pipeline --qa-dir .qa
    ```
 
    | File | Same as CI's |
@@ -403,6 +431,7 @@ visible in the repo rather than only in a job log that ages out.
    | `run-summary.md` | the job summary page: the run-cost block, then the timeline |
    | `trace.md` | `trace.md` in the run artifact |
    | `summary.md` | the PR comment (written in step 3) |
+   | `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.md` and `.json` | the same files, committed by the workflow. These are the only part of the run that is committed; everything above is scratch |
 
    Session transcripts record tokens, not cost, so `cost_usd` is `null`
    here. `scripts/run_local.py` gives the exact cost. None of these
@@ -412,9 +441,12 @@ visible in the repo rather than only in a job log that ages out.
    `run-summary.md` and `trace.md` are.
 6. **Local runs only** — remind the developer on screen to commit
    `.qa/context.md`, `.qa/github-action-qa-pipeline-template.yml`,
-   `.qa/test-inventory.json`, `.qa/runs/<...>.json`, and
+   `.qa/test-inventory.json`, every new file in `.qa/runs/` (this run's
+   `.md` and `.json`, and `README.md` the first time), and
    every test file `01-tests.json` listed under
-   `files_created`/`files_modified`. Locally this pipeline never commits on
+   `files_created`/`files_modified`. Say why the run record matters:
+   `.claude-pipeline/` is gitignored scratch, so the run record is the only
+   thing teammates will ever see of this run. Locally this pipeline never commits on
    its own (Section 9, Rule 5/6 — commits and merges are for people).
    **Exception, local `--live` only:** leave out any test file listed in
    `03-triage.json`'s `pr_planned.files_changed` when `pr_url` is set —
@@ -422,11 +454,14 @@ visible in the repo rather than only in a job log that ages out.
    exactly as in CI. Name the PR instead so the developer knows where it
    went.
 
-   **In CI mode, do not print that reminder** — there is no developer at a
-   terminal to act on it, and the workflow's "Record the run in `.qa/`"
-   step commits `.qa/` itself once every stage has finished. Say where it
-   landed instead: on the PR's own head branch. Test files still travel in
-   `/triage-tests`' auto-fix PR, as before.
+   **In CI mode, do not print that reminder.** There is no developer at a
+   terminal to act on it. The workflow's "Record the run and keep the
+   generated tests" step runs after this session ends. It puts every
+   generated test file that no auto-fix PR carries, together with `.qa/`,
+   in a PR into the branch this run was on. When there are no generated
+   tests, it commits `.qa/` onto that branch instead. Either way, it
+   appends where everything went to `summary.md` itself, so don't guess at
+   branch names or PR links here.
 
 **Expected — `.claude-pipeline/stages.json` (scratch, read by CI telemetry):**
 
@@ -459,6 +494,8 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 ## Tests
 {files created/modified from 01-tests.json, coverage before -> after}
 {tests_flagged_as_possible_bugs count, if any, called out by name}
+{one line per coverage_shortfall entry: "<module> stopped at <coverage>%: <what is uncovered> (<reason>)"}
+{one line per modules_skipped entry that has evidence: "<module> not tested: <reason> (<evidence>)"; and, if Stage 1's skip re-check disproved a claim, say which one and that /generate-tests was re-run}
 
 ## Context
 {"context is current" or which sections were updated}
@@ -478,10 +515,11 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 
 ## Please commit
 {local runs: the exact file list from Finish step 6 above}
-{CI runs: replace this section with "## Recorded" — say that `.qa/` was committed to the PR's head branch by the workflow, and name any test files travelling in the auto-fix PR}
+{CI runs: replace this section with "## Recorded" as the last section. Write one line: "The workflow keeps the generated tests and `.qa/` once this session ends; where they went is below." Then name any test files travelling in the auto-fix PR (fixes to already-committed tests). The workflow appends the rest under this heading.}
 ```
 
-**Expected — `.qa/runs/<yyyy-mm-dd>-<sha>.json`:**
+**Expected — `.claude-pipeline/run-record.json`** (scratch; `scripts/record_run.py`
+turns it into the committed `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.json` and `.md`):
 
 ```json
 {
@@ -518,12 +556,14 @@ at all (see the CI `run.json` notes).
 `pr_url` (i.e. actually opened, not report-only) — always `0` unless
 `fix_bugs` was on for this run.
 
-`strategy` and `stages` mirror what you wrote to `stages.json`, and are the
-durable half of this pipeline's telemetry: `.qa/runs/` is committed, so
-these accumulate into real history a team can look back over, while the
-cost figures live only in the CI run (you have no way to see your own token
-spend from inside the run). Pair them by `sha` when analyzing — that's the
-join key between a run record here and a `telemetry.json` from CI.
+`strategy` and `stages` mirror what you wrote to `stages.json`. You have
+no way to see your own token spend from inside the run, so leave telemetry
+out. `record_run.py` adds it afterwards from `telemetry.json`, along with
+`run` (source, who started it, event, run URL), `github` (every issue and
+PR the run filed or touched) and `schema_version: 2`. `.qa/runs/` is
+committed, so each run's record, telemetry included, accumulates into
+real history a team can look back over, locally run or CI. That history
+outlives the 90-day telemetry artifact.
 
 **Multi-stack repos** (`01-tests.json`/`03-triage.json` have a `stacks`
 shape — see `/generate-tests`): report coverage and triage totals **per

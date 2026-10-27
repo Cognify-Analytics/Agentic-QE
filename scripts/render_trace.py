@@ -437,7 +437,13 @@ def skipped_section(stages_json, tests, triage):
     if isinstance(tests, dict):
         for m in tests.get("modules_skipped") or []:
             if isinstance(m, dict):
-                lines.append(f"- No tests written for {code(m.get('path', '?'))}: {one_line(m.get('reason', ''), 200)}")
+                proof = f" (evidence: {code(m['evidence'], 120)})" if m.get("evidence") else ""
+                lines.append(f"- No tests written for {code(m.get('path', '?'))}: {one_line(m.get('reason', ''), 200)}{proof}")
+        for s in tests.get("coverage_shortfall") or []:
+            if isinstance(s, dict):
+                what = one_line(s.get("uncovered") or "", 120)
+                lines.append(f"- Coverage of {code(s.get('path', '?'))} stopped at {s.get('coverage', '?')}%"
+                             + (f", {what} uncovered" if what else "") + f": {one_line(s.get('reason', ''), 200)}")
         for t in tests.get("tests_removed") or []:
             if isinstance(t, dict):
                 lines.append(f"- Discarded its own test {code(t.get('test', '?'))}: {one_line(t.get('reason', ''), 200)}")

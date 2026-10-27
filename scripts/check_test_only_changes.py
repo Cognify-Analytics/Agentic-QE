@@ -10,6 +10,7 @@ on the pipeline.
 Usage:
     python scripts/check_test_only_changes.py --snapshot <file>
     python scripts/check_test_only_changes.py [--baseline <file>] [--github]
+    python scripts/check_test_only_changes.py [--baseline <file>] --list-tests
 
 Every changed path (tracked or untracked, from `git status`) lands in one
 of four groups:
@@ -18,8 +19,13 @@ of four groups:
     test        a test file, recognised by where it lives or what it is called
     byproduct   something a test run leaves behind: coverage reports, caches,
                 virtualenvs. Untracked files only. Reported, never failed,
-                and never committed -- the workflow only ever commits .qa/
+                and never committed -- the workflow commits .qa/ and tests only
     other       everything else: production source, config, lock files
+
+--list-tests judges nothing: it prints the "test" group, one path per line,
+and exits 0. The workflow runs it after the safety check has passed to find
+the generated tests it must commit, so both decide what a test is the same
+way.
 
 Any "other" path fails the check (exit 1); otherwise it exits 0.
 
@@ -165,7 +171,8 @@ def annotate(level, title, lines):
     print(f"::{level} title={title}::{message}")
 
 
-def check(baseline, github):
+def group_changes(baseline):
+    """({group: [path]}, [preexisting path], changed count) for the current tree."""
     changed = changed_paths()
     groups = {"pipeline": [], "test": [], "byproduct": [], "other": []}
     preexisting = []
@@ -181,8 +188,13 @@ def check(baseline, github):
             preexisting.append(path)
             continue
         groups[classify(path, status == "??", tracked)].append(path)
+    return groups, preexisting, len(changed)
 
-    print(f"{len(changed)} changed path(s) checked.")
+
+def check(baseline, github):
+    groups, preexisting, changed = group_changes(baseline)
+
+    print(f"{changed} changed path(s) checked.")
     for name, label in (("pipeline", "Pipeline output (.qa/, .claude-pipeline/)"),
                         ("test", "Test files"),
                         ("byproduct", "Test-run by-products (ignored, never committed)")):
@@ -223,6 +235,8 @@ def main():
     mode.add_argument("--snapshot", metavar="FILE", help="record what is already changed, then exit")
     mode.add_argument("--baseline", metavar="FILE", help="a --snapshot file from before the run")
     parser.add_argument("--github", action="store_true", help="emit GitHub Actions annotations")
+    parser.add_argument("--list-tests", action="store_true",
+                        help="print the changed test files, one per line, and judge nothing")
     args = parser.parse_args()
 
     if args.snapshot:
@@ -238,7 +252,11 @@ def main():
             with open(args.baseline) as f:
                 baseline = json.load(f)
         except (OSError, ValueError) as e:
-            print(f"No usable snapshot ({e}); judging every change.")
+            print(f"No usable snapshot ({e}); judging every change.", file=sys.stderr if args.list_tests else sys.stdout)
+    if args.list_tests:
+        for path in group_changes(baseline)[0]["test"]:
+            print(path)
+        return 0
     return check(baseline, args.github)
 
 
