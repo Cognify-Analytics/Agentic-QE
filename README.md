@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.1**, under active development. All five skills and the
+Version **0.4.2**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -203,6 +203,11 @@ What you need first:
 - The [GitHub CLI](https://cli.github.com), logged in (`gh auth login`)
   as someone with **write** access to the repo. A GitHub MCP server also
   works, and is tried first.
+- **git signed in to GitHub too.** The run pushes its fix branches with
+  plain git, which has its own sign-in, separate from `gh`'s. Run
+  `gh auth setup-git` once so git uses your `gh` login. If git can't sign
+  in, the preflight says so and tells you whether your branch is on GitHub,
+  so a sign-in problem is never mistaken for an unpushed branch.
 - Your current branch **pushed, with no unpushed commits.** In CI the PR
   base is always a branch that already exists on GitHub. Locally, an
   auto-fix branch cut from unpushed commits would carry them into the PR,
