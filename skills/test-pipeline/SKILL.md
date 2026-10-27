@@ -58,7 +58,12 @@ single-session behavior, just non-interactive.
      user every entry in `problems` and say they can fix those and re-run,
      or re-run without `--live` for a report-only run. Never quietly drop
      to report-only: they asked for live and should know they aren't
-     getting it.
+     getting it. Each problem already says, in plain words, what is wrong
+     and the one command that fixes it. Pass it on as written. Don't
+     reword it into a different diagnosis: "git can't sign in" is not "push
+     your branch", and a user told to push a branch that's already on
+     GitHub gets stuck. Offer to run the fix command for them (`gh auth
+     setup-git`, `git push ...`) and re-run once they agree.
 
    Report-only local runs and CI runs skip this step — neither one needs
    to reach GitHub from this machine.

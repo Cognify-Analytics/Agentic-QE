@@ -10,7 +10,7 @@
       "name": "agentic-qe",
       "source": "./",
       "description": "Skills that write unit tests, document a codebase, run the tests, and triage failures.",
-      "version": "0.4.1"
+      "version": "0.4.2"
     }
   ]
 }

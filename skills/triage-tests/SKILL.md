@@ -689,6 +689,13 @@ auto-fix branch cut from unpushed commits would carry them into the PR.
 The developer pushes first (`git push -u <remote> <branch>`), or runs
 report-only.
 
+**Local preflight says git can't sign in to or reach GitHub.** This is a
+different problem from an unpushed branch, even though `gh` works: the run
+pushes with plain git, which keeps its own sign-in. Relay the preflight's
+message as written. The usual fix is `gh auth setup-git`; offer to run it.
+Never tell the user to push a branch the preflight says is already on
+GitHub.
+
 **More than 10 COMPLEX/AMBIGUOUS failures.** File the first 10 individually,
 then one combined summary issue for the rest, and record the cap in
 `caps_hit`.
