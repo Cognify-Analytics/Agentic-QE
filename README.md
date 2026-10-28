@@ -31,6 +31,35 @@ for the CI design.
 | `--clickup-branches` | Opt-in. Names every branch the pipeline pushes after your branch's ClickUp task ID (see [ClickUp branch naming](#clickup-branch-naming--opt-in)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
 
+These flags work in a Claude Code session and with `scripts/run_local.py`. The headless runner adds four of its own, which control how Claude itself runs (see [Local runs get the same telemetry and summaries](#local-runs-get-the-same-telemetry-and-summaries)). They don't exist in an interactive session, which uses the model and effort you've set there (`/model`, or your Claude Code settings):
+
+| `run_local.py` flag | Default | Effect |
+|---|---|---|
+| `--model <name>` | `opus` | The model for the whole run, stages included. Any value `claude --model` accepts: `opus`, `sonnet`, `claude-opus-5-5`, … |
+| `--effort <level>` | `high` | Reasoning effort for the whole run: `low`, `medium`, `high`, `xhigh` or `max`. See [Model and effort](#model-and-effort) before lowering it |
+| `--max-turns <n>` | `150` | Stops the run after this many turns |
+| `--plugin-dir <path>` | the installed plugin | Use a local Agentic-QE checkout instead |
+
+Example with every flag (PowerShell, from the target repo's root):
+
+```powershell
+py <path-to-agentic-qe>\scripts\run_local.py `
+    --live --fix-bugs --clickup-branches `
+    --model sonnet --effort medium --max-turns 100 `
+    --plugin-dir <path-to-agentic-qe> `
+    src\pricing.py
+```
+
+```bash
+python <path-to-agentic-qe>/scripts/run_local.py \
+    --live --fix-bugs --clickup-branches \
+    --model sonnet --effort medium --max-turns 100 \
+    --plugin-dir <path-to-agentic-qe> \
+    src/pricing.py
+```
+
+`--live`, `--fix-bugs`, `--clickup-branches` and the target path (`src/pricing.py`, optional: leave it out for the whole repo) are passed to `/agentic-qe:test-pipeline`. The rest are read by `run_local.py`. Drop any you don't need: with none, you get a report-only run on `opus` at `high` effort.
+
 ## Supported languages
 
 The pipeline works out a repo's language and test setup from its manifest
@@ -911,7 +940,10 @@ from, or why it's missing.
 
 CI runs on `opus` at `high` effort by default. That matches a typical
 local session (`"model": "opus"` and `"effortLevel": "high"` in Claude
-Code's settings), so a CI run tests as deeply as a local one. Forked stages
+Code's settings), so a CI run tests as deeply as a local one. Locally, pick
+them per run with `run_local.py --model <name> --effort <level>` (for example
+`--model sonnet --effort medium`); in CI, with the `model` and `effort`
+inputs. Forked stages
 run at the session's model and effort, so the two inputs, `model` and
 `effort`, cover every stage. Both are in the telemetry and in the run-cost
 table, so two runs can be compared like for like.
