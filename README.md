@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.2**, under active development. All five skills and the
+Version **0.4.3**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -781,16 +781,37 @@ knowing later is distilled into it:
 
 | File | What it holds | Changes |
 |---|---|---|
-| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.md` | The run, for people. When, where and by whom it ran, the model and effort, how long it took and the turns, tokens and cost. Then the run summary: tests written, coverage, failures, what needs a human. Then every failure with its verdict and the reasoning behind it, every issue and PR it filed or touched, and drafted issues when the run was report-only. It ends with a table of the earlier runs recorded on the branch | Added once per run, never edited |
-| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.json` | The same for scripts, telemetry included | Added once per run, never edited |
-| `.qa/runs/README.md` | What the folder is and how to read it | Written once |
+| `.qa/runs/<stem>.md` | The run, for people. When, where and by whom it ran, the model and effort, how long it took and the turns, tokens and cost. Then the run summary: tests written, coverage, failures, what needs a human. Then every failure with its verdict and the reasoning behind it, every issue and PR it filed or touched, and drafted issues when the run was report-only. It ends with a table of the earlier runs recorded on the branch | Added once per run, never edited |
+| `.qa/runs/<stem>.json` | The same for scripts and the Agentic QE dashboard (run file contract, `schema_version` 2): repository and run identity, the run's real UTC start and end, the tests and every failure's classification, telemetry, and every issue and PR it filed or drafted | Added once per run, never edited |
+| `.qa/runs/README.md` | What the folder is and how to read it | Rewritten when the plugin's text for it changes |
 | `.qa/test-inventory.json`, `.qa/context.md` | The current state: which tests exist and what's covered, and what the project does | Updated in place |
 
 To see what happened in past runs, open `.qa/runs/` on GitHub and read
 the newest `.md`. Its "Earlier runs" table links to the ones before it.
-Names carry the UTC start time, so they sort in run order, and a re-run
-at the same commit never overwrites an earlier record. Every run only adds
-files, so two branches recording runs never conflict.
+Both files of a run share one name, `<stem>`:
+
+| Run | `<stem>` | Example |
+|---|---|---|
+| Local | `<YYYY-MM-DDTHHMMSSZ>-<sha7>-local-<rand6>` | `2026-10-28T091245Z-54efa8e-local-k3x9ab` |
+| GitHub Actions | `<YYYY-MM-DDTHHMMSSZ>-<sha7>-ci-<run id>-<run attempt>` | `2026-10-28T091245Z-54efa8e-ci-11223344556-1` |
+
+The time is the run's real UTC start (`run.started_at` in the JSON), so
+names sort in run order. The JSON's `name` is the stem, and so is a local
+run's `run.provider_run_id`; a CI run's is the GitHub run id. A record is
+never overwritten: a local run picks a new `<rand6>` if the name is taken,
+and a CI run, whose name is fixed, records nothing rather than replace an
+earlier file. Every run only adds files, so two branches recording runs
+never conflict. Older records keep their names (`<date>-<commit>.json`,
+`<date>-<time>-<commit>.json`).
+
+The JSON's fields, required and optional, are listed in the dashboard's run
+file contract. In short: `repository.full_name` comes from the `origin`
+remote (a repo without a GitHub `origin` gets a record without it, which
+the dashboard's loader then needs `--repo` for); unknown values are `null`
+or left out, never `0`, so a local session's cost is `null` with
+`cost_source` saying why; `triage.classifications` has one entry per failed
+test; and `github.issues`/`github.prs` hold only what this run opened or
+drafted, with `url: null` and `report_only: true` for a draft.
 
 `scripts/record_run.py` builds the record the same way for every kind of
 run, after telemetry is collected. A CI run's full trace stays in its

@@ -130,6 +130,12 @@ single-session behavior, just non-interactive.
 }
 ```
 
+`timestamp` is the real current UTC time, to the second. Take it from
+`date -u +%Y-%m-%dT%H:%M:%SZ` when you write the file. Never write today's
+date with `T00:00:00Z` or any other made-up time: it becomes the run's
+`started_at` and its file name in `.qa/runs/`, and the dashboard rejects a
+start time of exactly midnight as a placeholder.
+
 `branch_naming` is exactly what `scripts/branch_names.py` printed — in CI
 the workflow writes it, from its `clickup_branch_naming` and
 `clickup_task_id` inputs. With ClickUp naming on and a run on
@@ -436,7 +442,7 @@ visible in the repo rather than only in a job log that ages out.
    | `run-summary.md` | the job summary page: the run-cost block, then the timeline |
    | `trace.md` | `trace.md` in the run artifact |
    | `summary.md` | the PR comment (written in step 3) |
-   | `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.md` and `.json` | the same files, committed by the workflow. These are the only part of the run that is committed; everything above is scratch |
+   | `.qa/runs/<YYYY-MM-DDTHHMMSSZ>-<sha7>-local-<rand6>.md` and `.json` | the same files CI commits, named `...-ci-<run id>-<attempt>` there. These are the only part of the run that is committed; everything above is scratch |
 
    Session transcripts record tokens, not cost, so `cost_usd` is `null`
    here. `scripts/run_local.py` gives the exact cost. None of these
@@ -524,7 +530,7 @@ Started {timestamp} | SHA {sha} | branch {branch} | mode {report-only|live}
 ```
 
 **Expected — `.claude-pipeline/run-record.json`** (scratch; `scripts/record_run.py`
-turns it into the committed `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.json` and `.md`):
+turns it into the committed `.qa/runs/<stem>.json` and `.md`):
 
 ```json
 {
@@ -564,8 +570,13 @@ at all (see the CI `run.json` notes).
 `strategy` and `stages` mirror what you wrote to `stages.json`. You have
 no way to see your own token spend from inside the run, so leave telemetry
 out. `record_run.py` adds it afterwards from `telemetry.json`, along with
-`run` (source, who started it, event, run URL), `github` (every issue and
-PR the run filed or touched) and `schema_version: 2`. `.qa/runs/` is
+`repository` (from the `origin` remote), `run` (run id, source, who started
+it, event, run URL, real start and end times), `generator`, `tests` and
+`triage` (copied from `01-tests.json` and `03-triage.json`, so every
+classification is in the JSON, not only in the `.md`), `github` (the issues
+and PRs this run opened or drafted) and `schema_version: 2`. It also writes
+`mode` as `report_only` and sets `complex_issues` to the number of
+`COMPLEX` classifications. `.qa/runs/` is
 committed, so each run's record, telemetry included, accumulates into
 real history a team can look back over, locally run or CI. That history
 outlives the 90-day telemetry artifact.

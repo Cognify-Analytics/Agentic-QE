@@ -418,9 +418,17 @@ jobs:
         env:
           ACTOR: ${{ github.actor }}
           EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_SHA: ${{ github.job_workflow_sha }}
         run: |
           python .agentic-qe/scripts/record_run.py --pipeline-dir .claude-pipeline --qa-dir .qa \
-            --actor "$ACTOR" --event "$EVENT" || true
+            --actor "$ACTOR" --event "$EVENT" --repo "$REPO" --repo-id "$REPO_ID" \
+            --visibility "$VISIBILITY" --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --workflow-sha "$WORKFLOW_SHA" || true
 
       - name: Assert no production source was changed
         id: assert
