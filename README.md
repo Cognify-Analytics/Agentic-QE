@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.2**, under active development. All five skills and the
+Version **0.4.3**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -30,6 +30,35 @@ for the CI design.
 | `--live` | Actually file issues and open PRs (see [Filing issues and PRs from your machine](#filing-issues-and-prs-from-your-machine)) |
 | `--clickup-branches` | Opt-in. Names every branch the pipeline pushes after your branch's ClickUp task ID (see [ClickUp branch naming](#clickup-branch-naming--opt-in)) |
 | `--fix-bugs` | Opt-in. Lets triage attempt a narrow, verified fix to production source for some real bugs (see [`fix_bugs`](#fix_bugs--opt-in-bug-fix-prs)). Without `--live`, it only reports what it would change |
+
+These flags work in a Claude Code session and with `scripts/run_local.py`. The headless runner adds four of its own, which control how Claude itself runs (see [Local runs get the same telemetry and summaries](#local-runs-get-the-same-telemetry-and-summaries)). They don't exist in an interactive session, which uses the model and effort you've set there (`/model`, or your Claude Code settings):
+
+| `run_local.py` flag | Default | Effect |
+|---|---|---|
+| `--model <name>` | `opus` | The model for the whole run, stages included. Any value `claude --model` accepts: `opus`, `sonnet`, `claude-opus-5-5`, … |
+| `--effort <level>` | `high` | Reasoning effort for the whole run: `low`, `medium`, `high`, `xhigh` or `max`. See [Model and effort](#model-and-effort) before lowering it |
+| `--max-turns <n>` | `150` | Stops the run after this many turns |
+| `--plugin-dir <path>` | the installed plugin | Use a local Agentic-QE checkout instead |
+
+Example with every flag (PowerShell, from the target repo's root):
+
+```powershell
+py <path-to-agentic-qe>\scripts\run_local.py `
+    --live --fix-bugs --clickup-branches `
+    --model sonnet --effort medium --max-turns 100 `
+    --plugin-dir <path-to-agentic-qe> `
+    src\pricing.py
+```
+
+```bash
+python <path-to-agentic-qe>/scripts/run_local.py \
+    --live --fix-bugs --clickup-branches \
+    --model sonnet --effort medium --max-turns 100 \
+    --plugin-dir <path-to-agentic-qe> \
+    src/pricing.py
+```
+
+`--live`, `--fix-bugs`, `--clickup-branches` and the target path (`src/pricing.py`, optional: leave it out for the whole repo) are passed to `/agentic-qe:test-pipeline`. The rest are read by `run_local.py`. Drop any you don't need: with none, you get a report-only run on `opus` at `high` effort.
 
 ## Supported languages
 
@@ -752,16 +781,37 @@ knowing later is distilled into it:
 
 | File | What it holds | Changes |
 |---|---|---|
-| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.md` | The run, for people. When, where and by whom it ran, the model and effort, how long it took and the turns, tokens and cost. Then the run summary: tests written, coverage, failures, what needs a human. Then every failure with its verdict and the reasoning behind it, every issue and PR it filed or touched, and drafted issues when the run was report-only. It ends with a table of the earlier runs recorded on the branch | Added once per run, never edited |
-| `.qa/runs/<yyyy-mm-dd>-<hhmm>-<sha>.json` | The same for scripts, telemetry included | Added once per run, never edited |
-| `.qa/runs/README.md` | What the folder is and how to read it | Written once |
+| `.qa/runs/<stem>.md` | The run, for people. When, where and by whom it ran, the model and effort, how long it took and the turns, tokens and cost. Then the run summary: tests written, coverage, failures, what needs a human. Then every failure with its verdict and the reasoning behind it, every issue and PR it filed or touched, and drafted issues when the run was report-only. It ends with a table of the earlier runs recorded on the branch | Added once per run, never edited |
+| `.qa/runs/<stem>.json` | The same for scripts and the Agentic QE dashboard (run file contract, `schema_version` 2): repository and run identity, the run's real UTC start and end, the tests and every failure's classification, telemetry, and every issue and PR it filed or drafted | Added once per run, never edited |
+| `.qa/runs/README.md` | What the folder is and how to read it | Rewritten when the plugin's text for it changes |
 | `.qa/test-inventory.json`, `.qa/context.md` | The current state: which tests exist and what's covered, and what the project does | Updated in place |
 
 To see what happened in past runs, open `.qa/runs/` on GitHub and read
 the newest `.md`. Its "Earlier runs" table links to the ones before it.
-Names carry the UTC start time, so they sort in run order, and a re-run
-at the same commit never overwrites an earlier record. Every run only adds
-files, so two branches recording runs never conflict.
+Both files of a run share one name, `<stem>`:
+
+| Run | `<stem>` | Example |
+|---|---|---|
+| Local | `<YYYY-MM-DDTHHMMSSZ>-<sha7>-local-<rand6>` | `2026-10-28T091245Z-54efa8e-local-k3x9ab` |
+| GitHub Actions | `<YYYY-MM-DDTHHMMSSZ>-<sha7>-ci-<run id>-<run attempt>` | `2026-10-28T091245Z-54efa8e-ci-11223344556-1` |
+
+The time is the run's real UTC start (`run.started_at` in the JSON), so
+names sort in run order. The JSON's `name` is the stem, and so is a local
+run's `run.provider_run_id`; a CI run's is the GitHub run id. A record is
+never overwritten: a local run picks a new `<rand6>` if the name is taken,
+and a CI run, whose name is fixed, records nothing rather than replace an
+earlier file. Every run only adds files, so two branches recording runs
+never conflict. Older records keep their names (`<date>-<commit>.json`,
+`<date>-<time>-<commit>.json`).
+
+The JSON's fields, required and optional, are listed in the dashboard's run
+file contract. In short: `repository.full_name` comes from the `origin`
+remote (a repo without a GitHub `origin` gets a record without it, which
+the dashboard's loader then needs `--repo` for); unknown values are `null`
+or left out, never `0`, so a local session's cost is `null` with
+`cost_source` saying why; `triage.classifications` has one entry per failed
+test; and `github.issues`/`github.prs` hold only what this run opened or
+drafted, with `url: null` and `report_only: true` for a draft.
 
 `scripts/record_run.py` builds the record the same way for every kind of
 run, after telemetry is collected. A CI run's full trace stays in its
@@ -911,7 +961,10 @@ from, or why it's missing.
 
 CI runs on `opus` at `high` effort by default. That matches a typical
 local session (`"model": "opus"` and `"effortLevel": "high"` in Claude
-Code's settings), so a CI run tests as deeply as a local one. Forked stages
+Code's settings), so a CI run tests as deeply as a local one. Locally, pick
+them per run with `run_local.py --model <name> --effort <level>` (for example
+`--model sonnet --effort medium`); in CI, with the `model` and `effort`
+inputs. Forked stages
 run at the session's model and effort, so the two inputs, `model` and
 `effort`, cover every stage. Both are in the telemetry and in the run-cost
 table, so two runs can be compared like for like.
