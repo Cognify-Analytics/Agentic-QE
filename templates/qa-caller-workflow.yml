@@ -33,6 +33,12 @@ on:
 
 jobs:
   qa:
+    # Skip the pipeline's own PRs (auto-fix/... and agentic-qe/... branches), so a
+    # fix or tests PR it opened never starts another run. Leave as it is.
+    if: >
+      github.event_name != 'pull_request' ||
+      (!startsWith(github.head_ref, 'auto-fix/') &&
+       !startsWith(github.head_ref, 'agentic-qe/'))
     # The Agentic-QE version to use. Keep plugin_ref below the same.
     uses: Cognify-Analytics/Agentic-QE/.github/workflows/qa-pipeline.yml@main
     secrets: inherit

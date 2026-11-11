@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.3**, under active development. All five skills and the
+Version **0.4.4**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI). See
@@ -568,6 +568,7 @@ on:
 | Close and reopen a pull request | ❌ No |
 | Open a pull request that **only** changes `*.md`, `docs/` or `.github/` files | ❌ No, and no check appears on the PR at all |
 | Open a pull request from a fork, or one labelled `qa:skip` | ❌ Skipped |
+| A pull request the pipeline opened itself (head branch `auto-fix/...` or `agentic-qe/...`) | ❌ Skipped, so its fix and tests PRs never start another run |
 | **Actions → QA Pipeline → Run workflow** | ✅ Yes, on the branch you pick |
 
 To test new commits on a pull request that is already open, either click
@@ -610,7 +611,11 @@ auto-fix/CU-86bbh0u96-triage-<sha> ─────PR──┴──► feature/C
 
 The workflow's own commits never start another run. Pushes made with the
 workflow's `GITHUB_TOKEN` don't trigger workflows, and new commits on a PR
-aren't a trigger anyway.
+aren't a trigger anyway. A local `--live` run is different: it pushes and
+opens PRs with your own credentials, and those do trigger workflows. So the
+pipeline skips every PR whose head branch starts with `auto-fix/` or
+`agentic-qe/`. Otherwise each fix PR would start a full run that opens more
+PRs.
 
 #### What a run decides to do
 

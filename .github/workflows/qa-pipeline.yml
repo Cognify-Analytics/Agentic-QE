@@ -130,9 +130,17 @@ jobs:
     # PR comment, not a bot). Everyone else's comments never start a run -- on a public
     # repo, a comment must not be able to make the pipeline change code. The pipeline's
     # own comments use GITHUB_TOKEN, which never triggers workflows, so there is no loop.
+    #
+    # pull_request: never on a PR the pipeline opened itself (head branch auto-fix/... or
+    # agentic-qe/..., ClickUp-named ones included). A local --live run pushes those
+    # branches with a person's credentials, which DOES trigger workflows, so without this
+    # each fix PR would start a full run that opens more PRs. Matched on the head branch
+    # because `branches-ignore` on pull_request filters the base, not the head.
     if: >
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository &&
+       !startsWith(github.event.pull_request.head.ref, 'auto-fix/') &&
+       !startsWith(github.event.pull_request.head.ref, 'agentic-qe/') &&
        github.event.pull_request.draft == false &&
        !contains(github.event.pull_request.labels.*.name, 'qa:skip')) ||
       (github.event_name == 'issue_comment' &&
