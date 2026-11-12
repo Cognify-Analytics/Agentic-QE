@@ -51,7 +51,7 @@ or the test cannot be safely touched at all.
 | The test was written by a human | Always COMPLEX regardless of anything else on this list — see the override rule above | **No** — always issue-only in v1, regardless of how strong the evidence looks |
 
 **"Eligible for opt-in bug-fix mode" only matters when `fix_bugs` is on**
-(see `skills/triage-tests/SKILL.md` Step 7.5 and PRD Section 9.1). It is
+(see `skills/triage-tests/SKILL.md` Step 7.5). It is
 off by default; every failure in this table is issue-only, exactly as
 described above, unless a run explicitly turns that mode on.
 
@@ -62,7 +62,7 @@ whether the mistake is in the test or in the code, it is AMBIGUOUS. Do not
 break the tie by guessing, and do not default to SIMPLE because that's the
 cheaper outcome. **AMBIGUOUS is COMPLEX.** A missed opportunity to auto-fix a
 test is a minor cost. A real bug auto-fixed into invisibility is the failure
-this entire project exists to prevent — see PRD Section 1, Part 3.
+this entire project exists to prevent.
 
 ### Recognising the signals per stack
 

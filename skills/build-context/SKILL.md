@@ -97,7 +97,7 @@ limit. Every run must produce something matching that shape.
      reproduce on its own). A file written before section 5 existed has
      none — that counts as section 5 changing.
   4. If **3 or 4 of sections 1-4** would change, treat this the same as a
-     full rebuild — approximates the PRD's "more than 30% of files changed →
+     full rebuild — approximates "more than 30% of files changed →
      rebuild the whole document" without needing a file-count diff this
      skill has no way to compute. Section 5 is judged on its own and never
      counts toward this.
@@ -157,7 +157,7 @@ and `middleware.ts`; a Node `server.ts`/`main.ts` (Express/NestJS);
 `@Value("${...}")` references for configuration. Same
 rule: "None found." is a valid answer for any of these if the project
 genuinely has none — do not invent an entry point, a database, or an env
-var that isn't there just because the PRD's own worked example has one.
+var that isn't there just because a typical project would have one.
 
 ### Step 7 — Section 4: test coverage
 

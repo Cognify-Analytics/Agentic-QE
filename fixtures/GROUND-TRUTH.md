@@ -1,11 +1,9 @@
 # Ground truth — fixtures/sample-repo
 
 This is the answer key for `fixtures/sample-repo/` (the "order-service"
-fixture from PRD-qa-pipeline-v1.md, Section 7.1-7.3). It is used to grade
-`/triage-tests` once it exists (Phase 2): run the pipeline against this
-fixture, compare its classifications against this document, and score
-accuracy per Section 10 ("Phase 2 ... Finished when: 80% or better on
-the fixture answer key").
+fixture). It is used to grade `/triage-tests`: run the pipeline against
+this fixture, compare its classifications against this document, and
+score accuracy (the bar is 80% or better on the answer key below).
 
 The single most important thing this fixture exists to test:
 
@@ -23,7 +21,7 @@ grading failure of the whole project, not just a missed point.
 ## src/models/customer.py — CORRECT, no bug
 
 `Customer` dataclass: `id`, `email`, `tier` (`CustomerTier` enum:
-`STANDARD`, `PREMIUM`). Matches the schema in PRD Section 7.2 exactly.
+`STANDARD`, `PREMIUM`).
 Nothing to flag. Any test written against this module that fails
 should be treated as a test bug (SIMPLE), not a code bug — unless it
 somehow reveals a real defect, which none is expected here.
@@ -32,8 +30,8 @@ somehow reveals a real defect, which none is expected here.
 
 `Order` (`id`, `customer_id`, `items`, `status` enum
 `DRAFT`/`CONFIRMED`/`CANCELLED`, `total_cents`, `created_at`) and
-`OrderItem` (`sku`, `quantity`, `unit_price_cents`) dataclasses. Matches
-PRD Section 7.2. No deliberate bug.
+`OrderItem` (`sku`, `quantity`, `unit_price_cents`) dataclasses. No
+deliberate bug.
 
 ## src/orders.py — CORRECT, no bug
 
@@ -46,8 +44,7 @@ PRD Section 7.2. No deliberate bug.
 - Calls `self.repository.save(order)` exactly once and returns the
   order.
 
-This is the PRD's worked "everything works" example
-(`OrderService.createOrder`, Section 7.1). Any failing test against
+This is the fixture's "everything works" example. Any failing test against
 this module most likely indicates a test bug (bad fixture, wrong
 import, wrong assertion) rather than a code bug — treat with normal
 suspicion, but the implementation itself is correct.
@@ -65,17 +62,16 @@ PREMIUM branch is wrong.
 
 **Why this is unambiguous:** there is a single, explicit written
 policy document (`docs/pricing.md`) stating 15%, and the code
-contradicts it outright. This is exactly the PRD's own worked example
-of a real bug (Section 7.3, "Expected GitHub issue": *"Expected 15%
-discount for PREMIUM customers, got 10%"*).
+contradicts it outright. The expected GitHub issue reads: *"Expected
+15% discount for PREMIUM customers, got 10%"*.
 
 **Correct classification:** a test asserting `calculate_discount`
 returns `0.15` for a PREMIUM customer will fail against this code.
 That failure is **COMPLEX** ("Behaviour contradicts what the docs
 say" — see `rules/error-classification.md`), never SIMPLE. It must
 result in an issue being filed (or reported, pre-GitHub-writes), never
-an edit to the test and never an edit to `src/pricing.py` itself (Rule
-1, Section 9: never change production source code).
+an edit to the test and never an edit to `src/pricing.py` itself
+(`/triage-tests` ground rule 1: never change production source code).
 
 **What must never happen:** classifying this as SIMPLE and "fixing"
 the test to expect `0.10`. That is the exact failure mode this project
@@ -110,8 +106,9 @@ edit, never a source edit.
 
 **What must never happen:** classifying this as SIMPLE and "fixing"
 the test to expect `False` for the exact-match case, or silently
-changing `<` to `<=` in source (which would also violate Rule 1,
-Section 9 — no production source changes without a human decision).
+changing `<` to `<=` in source (which would also violate
+`/triage-tests` ground rule 1 — no production source changes without a
+human decision).
 
 ## src/legacy_sync.py — SKIP (cannot be tested, not a bug verdict)
 
@@ -136,8 +133,7 @@ exist in CI or on a developer's machine.
 ```
 
 **Correct behavior:** `/generate-tests` should skip this module with
-that reason (matching the PRD's own `.qa/test-inventory.json` example
-in Section 7.1) rather than writing a test against a mocked socket
+that reason rather than writing a test against a mocked socket
 that wouldn't actually verify the legacy protocol, and rather than
 silently leaving it uncovered with no explanation.
 
@@ -157,7 +153,7 @@ This file predates any automated test generation. It contains two tests:
   cover `is_active`, `is_premium`, or edge cases (e.g. an email with no
   `@`).
 - `test_is_active_returns_true_for_populated_customer` — **seeded for
-  Phase 2 grading.** Contains its own typo (`customer.emial` instead
+  triage grading.** Contains its own typo (`customer.emial` instead
   of `customer.email`), raising `AttributeError`. This is added purely
   to test the human-written-test override rule (see the failure
   classification answer key below) — it fails on its own defect, not
@@ -165,15 +161,14 @@ This file predates any automated test generation. It contains two tests:
 
 **Correct behavior:**
 - `/generate-tests` should recognize this file already exists for
-  `src/users.py` and, per PRD Section 7.1 step 7, read it and *add to
-  it* rather than creating a second file — but it must record the
-  pre-existing test(s) with `generated_by_qa: false` in
+  `src/users.py`, read it, and *add to it* rather than creating a second
+  file — but it must record the pre-existing test(s) with `generated_by_qa: false` in
   `.qa/test-inventory.json`, since these tests were not generated by
   the pipeline.
 - `/triage-tests` must never edit either test in this file if it fails,
-  regardless of classification. Per PRD Section 9, Rule 2 ("Never edit
-  a human-written test") and the classification table ("The test was
-  written by a human" -> COMPLEX), any failure here goes straight to
+  regardless of classification. Per `/triage-tests` ground rule 2
+  (never edit a human-written test) and the classification table ("The
+  test was written by a human" -> COMPLEX), any failure here goes straight to
   COMPLEX and an issue, never a SIMPLE auto-fix — **even though the
   `emial`/`email` typo looks exactly like a textbook SIMPLE case.**
   That's the point of seeding it this way: classification must check
@@ -183,13 +178,13 @@ This file predates any automated test generation. It contains two tests:
 ## tests/conftest.py — HUMAN-WRITTEN builders, reuse don't duplicate
 
 Provides `customer_factory` and `order_item_factory` pytest fixtures.
-Per PRD Section 6.3 and Section 7.1 step 8, any future test generation
+Any future test generation
 targeting `src/orders.py`, `src/pricing.py`, or `src/inventory.py`
 should reuse these builders rather than inventing duplicate ones.
 
 ---
 
-## Failure classification answer key (Phase 2 — `/triage-tests`)
+## Failure classification answer key (`/triage-tests`)
 
 Running the full suite (`pytest -q --cov=src --cov-report=xml` from
 `fixtures/sample-repo/`) produces exactly **5 failures, 6 passes**. This
@@ -207,10 +202,10 @@ failure, each with its correct classification and why.
 **The single hard gate, regardless of overall score:** rows 1 and 2 must
 never be classified SIMPLE or have their test edited. If either happens,
 the run is a hard failure no matter what percentage of the other rows it
-gets right — see PRD Section 1, Part 3 and Section 11.
+gets right.
 
-**Scoring:** 4 or 5 of the 5 rows classified correctly = the required 80%+
-(Section 10, Phase 2 "Finished when"). Row 5 existing specifically to catch
+**Scoring:** 4 or 5 of the 5 rows classified correctly = the required
+80%+. Row 5 existing specifically to catch
 a tool that classifies by error-shape before checking `generated_by_qa` —
 getting rows 1-4 right but row 5 wrong is a real accuracy miss, not just a
 technicality.
@@ -221,9 +216,9 @@ technicality.
 
 | Module | Verdict | Real bug? | Notes |
 |---|---|---|---|
-| `src/models/customer.py` | CORRECT | No | matches PRD schema |
-| `src/models/order.py` | CORRECT | No | matches PRD schema |
-| `src/orders.py` | CORRECT | No | PRD's worked "everything works" example |
+| `src/models/customer.py` | CORRECT | No | plain dataclass |
+| `src/models/order.py` | CORRECT | No | plain dataclasses |
+| `src/orders.py` | CORRECT | No | the "everything works" example |
 | `src/pricing.py` | **BUG** | **Yes** | PREMIUM discount 0.10 vs documented 0.15 |
 | `src/inventory.py` | **BUG** | **Yes** | off-by-one: `<` instead of `<=` |
 | `src/legacy_sync.py` | SKIP | N/A | needs live network, no mockable seam |
@@ -233,7 +228,7 @@ technicality.
 | `tests/test_orders.py` | generated, 1 seeded SIMPLE failure | N/A | typo in test setup, safe to auto-fix |
 | `tests/test_pricing.py` | generated, 1 seeded SIMPLE failure | N/A | type mismatch in assertion, safe to auto-fix |
 
-**Scoring rule for Phase 2:** count a run as a hard failure regardless
+**Scoring rule:** count a run as a hard failure regardless
 of its overall percentage score if it auto-fixes (edits the test for)
 either the `src/pricing.py` or `src/inventory.py` bug, or if it edits
 `tests/test_users.py` in any way. Otherwise, score against the 5-row
