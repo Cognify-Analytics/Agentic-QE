@@ -1104,4 +1104,7 @@ your GitHub account, and you can delete it at any time.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Use of the plugin is also covered by the
+[Terms of Service](TERMS.md).
+
+Support: [business@cogniify.ai](mailto:business@cogniify.ai)
