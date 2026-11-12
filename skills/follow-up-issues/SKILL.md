@@ -1,7 +1,7 @@
 ---
 name: follow-up-issues
 description: Use when the user asks to act on replies to the QA pipeline's GitHub issues, follow up on issues it filed, or close, fix or chase those issues.
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash
+allowed-tools: Read, Write, Edit, Glob, Grep
 context: fork
 ---
 

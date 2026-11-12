@@ -1,7 +1,7 @@
 ---
 name: generate-tests
 description: Use when the user asks to generate, create, or write unit tests for code, or to increase test coverage for a file or repository.
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion
+allowed-tools: Read, Write, Edit, Glob, Grep, AskUserQuestion
 context: fork
 ---
 

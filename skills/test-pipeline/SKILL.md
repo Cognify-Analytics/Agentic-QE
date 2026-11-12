@@ -1,7 +1,7 @@
 ---
 name: test-pipeline
 description: Use when the user asks to run the full QA pipeline, audit test health end to end, or set up testing for a repository.
-allowed-tools: Read, Write, Bash, Skill
+allowed-tools: Read, Write, Skill(agentic-qe:follow-up-issues), Skill(agentic-qe:generate-tests), Skill(agentic-qe:build-context), Skill(agentic-qe:triage-tests)
 ---
 
 # Test Pipeline Skill
