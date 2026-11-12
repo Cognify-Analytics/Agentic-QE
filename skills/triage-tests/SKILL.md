@@ -1,7 +1,7 @@
 ---
 name: triage-tests
 description: Use when the user asks to run tests and triage, classify, or fix failures, or to file issues for failing tests.
-allowed-tools: Read, Edit, Glob, Grep, Bash
+allowed-tools: Read, Edit, Glob, Grep
 context: fork
 ---
 

@@ -7,7 +7,7 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.5**, under active development. All five skills and the
+Version **0.4.6**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
 you turn on `--live` (locally) or `live: true` (in CI).
@@ -215,6 +215,12 @@ be committed. At the end it lists exactly which files to commit. They
 include the run's record in `.qa/runs/`, the only part of a local run your
 teammates will ever see (see [What a run leaves
 behind](#what-a-run-leaves-behind)).
+
+The skills don't pre-approve shell commands, so Claude Code asks before it
+runs your test command, `git`, `gh` or the plugin's own Python scripts.
+Choose "always allow" for the ones you're happy with, or add them to your
+[permission settings](https://code.claude.com/docs/en/settings).
+In CI the workflow grants these itself, so nothing prompts there.
 
 ### Filing issues and PRs from your machine
 
