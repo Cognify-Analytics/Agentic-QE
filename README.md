@@ -1049,7 +1049,6 @@ tooling.
   - `check_test_only_changes.py` — the CI safety check that fails a run which changed anything but tests (see [The safety check](#the-safety-check)); with `--list-tests`, also what decides which generated tests the workflow commits
   - `render_tests_pr.py` — writes the PR that carries a CI run's generated tests: coverage, tests failing on purpose with their issues, and what wasn't covered
   - `record_run.py` — writes each run's committed record in `.qa/runs/` (a readable `.md` and a `.json` with telemetry), the same way for CI and local runs
-- `fixtures/` — a sample (Python) repo with known, documented bugs, used to grade `/triage-tests`
 - `.github/workflows/qa-pipeline.yml` — the reusable GitHub Actions workflow
 
 ## Working on this repo itself

@@ -7,3 +7,6 @@ __pycache__/
 coverage.xml
 node_modules/
 .DS_Store
+
+# Local-only test fixture (nested git repo, not shipped with the plugin)
+fixtures/
