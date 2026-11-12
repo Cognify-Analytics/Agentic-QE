@@ -1070,6 +1070,38 @@ claude --plugin-dir .
 Run `/reload-plugins` after editing a `SKILL.md` to pick up changes
 without restarting.
 
+## Privacy
+
+Agentic QE has no server of its own. Nothing is sent to Cognify Analytics,
+and Cognify does not receive or keep any of your data.
+
+**What it reads.** Your repository's source, tests, docs and build files,
+and its `CODEOWNERS` file, which can contain GitHub usernames, team names
+and email addresses. In live mode it also asks GitHub, through your own
+`gh` login, which users can be assigned and who belongs to the teams that
+`CODEOWNERS` names.
+
+**What it stores, and where.** Only in your own repository: `.qa/` (the
+project context document, the test inventory, and a record of each run,
+which includes the owners and assignees picked for issues and PRs) and
+`.claude-pipeline/` (scratch files, git-ignored). Cost and token figures
+come from your local Claude Code session transcript or the GitHub Actions
+log and are written to the same places.
+
+**What it sends, and to whom.** Only to GitHub, and only in live mode
+(`--live` locally, `live: true` in CI): branches, pull requests, issues and
+comments on your repository. These contain test names, failure output,
+short excerpts of your code, file paths, and @mentions of code owners.
+They are sent with your own GitHub credentials, and GitHub's privacy terms
+apply to them. Report-only mode, the default, sends nothing.
+
+Claude reads your code while running the skills, as it does for any Claude
+Code session. That is covered by your agreement with Anthropic. In CI it
+uses the `ANTHROPIC_API_KEY` you configure.
+
+How long any of this is kept is up to you: it lives in your repository and
+your GitHub account, and you can delete it at any time.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
