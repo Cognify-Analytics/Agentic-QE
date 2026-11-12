@@ -7,12 +7,10 @@ a GitHub Action run it on every pull request.
 
 ## Status
 
-Version **0.4.4**, under active development. All five skills and the
+Version **0.4.5**, under active development. All five skills and the
 reusable GitHub Actions workflow are built. Everything defaults to
 **report-only**: issues and PRs are drafted in full but never filed until
-you turn on `--live` (locally) or `live: true` (in CI). See
-`PRD-qa-pipeline-v1.md` for the full spec and `PLAN-github-action-v1.md`
-for the CI design.
+you turn on `--live` (locally) or `live: true` (in CI).
 
 ## Skills
 
@@ -840,7 +838,7 @@ itself, in a dedicated "Record the run and keep the generated tests" step:
 | The run | What the workflow does |
 |---|---|
 | Wrote tests | First, it commits the run record (`.qa/runs/`) straight onto the PR's head branch, so the history of what the run found and filed survives even if the tests are never merged. Then it commits the tests **together with** the rest of `.qa/` to the pipeline's own branch, `agentic-qe/qa-baseline-<sha>` (or its [ClickUp name](#clickup-branch-naming--opt-in)), and opens a PR into the branch the run was on: the PR's head branch, or the default branch for a manual run there. The PR lists coverage before and after, the tests that fail on purpose with their issues, and what wasn't covered and why |
-| Wrote no tests (`triage-only`, or nothing to test) | Commits `.qa/` alone, run record included, straight onto the PR's head branch. On the default branch it pushes `agentic-qe/qa-baseline-<sha>` with a PR instead, because the pipeline never pushes to a default branch (PRD Section 9, Rule 5) |
+| Wrote no tests (`triage-only`, or nothing to test) | Commits `.qa/` alone, run record included, straight onto the PR's head branch. On the default branch it pushes `agentic-qe/qa-baseline-<sha>` with a PR instead, because the pipeline never pushes to a default branch |
 
 Tests and `.qa/` travel together on purpose. `.qa/test-inventory.json`
 names every test file the pipeline owns. Committed without those files, it
@@ -1066,3 +1064,7 @@ claude --plugin-dir .
 
 Run `/reload-plugins` after editing a `SKILL.md` to pick up changes
 without restarting.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

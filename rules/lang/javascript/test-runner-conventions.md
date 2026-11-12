@@ -134,7 +134,7 @@ The expected values are literals from the documented contract, never computed fr
 
 ### 8. Snapshots — Not a Substitute for Assertions
 
-A snapshot written by the first run records whatever the code currently does. That is the "assert the current output" anti-pattern this project exists to eliminate (PRD Section 1, Part 3).
+A snapshot written by the first run records whatever the code currently does. That is the "assert the current output" anti-pattern this project exists to eliminate.
 
 - Don't generate snapshot tests to cover a module. Assert the specific, documented values instead.
 - Use small `toMatchInlineSnapshot()` only when the repo already uses snapshots and the output is a stable serialisation the reader can check by eye.

@@ -16,7 +16,7 @@ in the developer's main session so they can watch each stage happen.
 **Arguments, if given:** $ARGUMENTS — pass `--live` to run `/triage-tests`
 in live mode (real branches/PRs/issues) instead of the default report-only.
 Pass `--fix-bugs` to also turn on `/triage-tests`' opt-in bug-fix mode
-(off by default — see its Step 7.5/8.5 and PRD Section 9.1); this works
+(off by default — see its Step 7.5/8.5); this works
 independently of `--live` per that skill's own rules. Pass
 `--clickup-branches` for a repo whose branch policy requires a ClickUp task
 ID in every branch name: the branches `/triage-tests` pushes then reuse
@@ -288,7 +288,7 @@ Otherwise, invoke it with the Skill tool (forwarding any target from
 **If either applicable check fails: stop the whole pipeline right here.**
 Do not run Stage 2 or 3. Report exactly which check failed and show
 whatever `01-tests.json` does contain (even a `"status": "partial"` file
-has useful detail). This is the check the PRD calls out by name — a silent
+has useful detail). This check matters most of all — a silent
 failure here would hand Stage 2 nothing to document and Stage 3 nothing
 real to triage.
 
@@ -598,9 +598,8 @@ step 1). This is the one failure mode that blocks the pipeline before it
 even starts, rather than between stages.
 
 **Stage 1 fails (no test framework detected, or it stops for any other
-reason).** Report it and stop — this is the "deliberately breaking stage 1"
-case the PRD's Phase 4 finish criterion names directly. Stage 2 and 3 must
-never run against a repo that Stage 1 gave up on.
+reason).** Report it and stop. Stage 2 and 3 must never run against a
+repo that Stage 1 gave up on.
 
 **Stage 2 says "context is current" every time even after real changes.**
 That's a `/build-context` bug, not something to work around here — report

@@ -622,7 +622,7 @@ jobs:
           # Everything else goes on the pipeline's own branch, with a PR: generated
           # tests (and the .qa/ that describes them) into the branch the run was on,
           # or a .qa/-only baseline into the default branch. The pipeline never
-          # pushes to a default branch (PRD Section 9, Rule 5).
+          # pushes to a default branch (triage-tests ground rule 3).
           BASE="${HEAD_BRANCH:-${DEFAULT_BRANCH}}"
 
           # Named by scripts/branch_names.py in the plan step. Null means ClickUp

@@ -166,8 +166,8 @@ silently pick one for the user. Writing the file before stopping matters:
 `/test-pipeline`'s Stage 1 check (and a developer running this skill
 standalone) both depend on `01-tests.json` existing to know what happened
 — a stage that stops without writing anything looks identical to a crash,
-and the whole point of this project's file-based handoffs (PRD Section
-6.5) is that nothing gets lost silently.
+and the whole point of this project's file-based handoffs is that nothing
+gets lost silently.
 
 ### Step 3 — Work out where tests go
 
@@ -359,11 +359,11 @@ learned in Step 7 and using the builders from Step 8.
      no amount of retrying the test's mechanics will change a real behavioral
      gap. **Do not spend fix attempts on it, do not delete it, and do not
      weaken the assertion to match the code's current output** — that second
-     move is the exact anti-pattern this whole project exists to eliminate
-     (see the PRD, Section 1, Part 3). Keep the test in the file, failing,
+     move is the exact anti-pattern this whole project exists to eliminate.
+     Keep the test in the file, failing,
      and record it distinctly in `01-tests.json` under
      `tests_flagged_as_possible_bugs` (not `tests_removed`) with the reason.
-     Say so on screen too. This is precisely the seam `/triage-tests` (Phase 2)
+     Say so on screen too. This is precisely the seam `/triage-tests`
      is built to pick up — a failing test here is a lead, not a defect in the
      test.
    - When genuinely unsure which of the two applies, treat it as the second
@@ -755,7 +755,7 @@ is the loading rule — they must agree.
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/what-makes-good-test.md` — Clarity, Completeness, Conciseness, Resilience
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/existing-test-awareness.md` — extend, don't duplicate
 - `${CLAUDE_PLUGIN_ROOT}/rules/general/code-context-analysis.md` — read the full dependency graph first
-- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go, per Section 6.2 of the PRD
+- `${CLAUDE_PLUGIN_ROOT}/rules/test-location-map.md` — where tests go
 - the files directly inside the detected language's folder(s), per Step 1's table:
   `${CLAUDE_PLUGIN_ROOT}/rules/lang/python/`, `${CLAUDE_PLUGIN_ROOT}/rules/lang/javascript/`
   (JS and TS), `${CLAUDE_PLUGIN_ROOT}/rules/lang/jvm/` plus `${CLAUDE_PLUGIN_ROOT}/rules/lang/java/`

@@ -2,11 +2,12 @@
   "name": "agentic-qe",
   "displayName": "Agentic QE",
   "description": "Skills that write unit tests, document a codebase, run the tests, and triage failures — entirely inside Claude Code.",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "author": {
     "name": "Cognify Analytics"
   },
   "homepage": "https://github.com/Cognify-Analytics/Agentic-QE",
   "repository": "https://github.com/Cognify-Analytics/Agentic-QE",
+  "license": "MIT",
   "keywords": ["testing", "qa", "test-generation", "coverage", "triage"]
 }

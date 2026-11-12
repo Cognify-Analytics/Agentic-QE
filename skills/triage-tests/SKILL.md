@@ -22,8 +22,8 @@ is the default because this project is still early in its build — treat
 Also pass `--fix-bugs` to turn on the opt-in bug-fix mode (Step 7.5/8.5) —
 off by default, unrelated to `--live` (it works in either mode: report-only
 `--fix-bugs` computes and shows what it *would* fix without touching any
-file; `--live --fix-bugs` actually applies it). See Ground rule 1 below and
-PRD Section 9.1 before turning this on.
+file; `--live --fix-bugs` actually applies it). See Ground rule 1 and
+Step 7.5 below before turning this on.
 
 Pass `--clickup-branches` for a repo whose branch policy requires a ClickUp
 task ID in every branch name — see "Branch names" below.
@@ -42,7 +42,7 @@ never infer it as on.
 project exists to prevent.** Every other rule below exists in service of
 that one. When in doubt, escalate — never guess your way to SIMPLE.
 
-## Ground rules (Section 9 of the PRD — non-negotiable, live or report-only)
+## Ground rules (non-negotiable, live or report-only)
 
 1. Never change production source code. A fix that would require a source
    change is automatically COMPLEX. **The one narrow, explicit exception:**
