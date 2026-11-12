@@ -9,5 +9,6 @@
   "homepage": "https://github.com/Cognify-Analytics/Agentic-QE",
   "repository": "https://github.com/Cognify-Analytics/Agentic-QE",
   "license": "MIT",
+  "privacyPolicyUrl": "https://github.com/Cognify-Analytics/Agentic-QE#privacy",
   "keywords": ["testing", "qa", "test-generation", "coverage", "triage"]
 }
